@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arbre de decision Cache-Control interactif</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column}
+  header{background:#16213e;padding:18px 30px;border-bottom:2px solid #0f3460;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  header h1{font-size:1.4rem;color:#e94560;letter-spacing:.5px}
+  .controls{display:flex;gap:8px;align-items:center}
+  .controls button{background:#0f3460;color:#e0e0e0;border:1px solid #e94560;padding:7px 18px;border-radius:6px;cursor:pointer;font-size:.85rem;transition:all .2s}
+  .controls button:hover{background:#e94560;color:#fff}
+  .controls button.active{background:#e94560;color:#fff}
+  .scenarios{display:flex;gap:8px;flex-wrap:wrap}
+  .scenarios button{background:#0f3460;color:#e0e0e0;border:1px solid #533483;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:.8rem;transition:all .2s}
+  .scenarios button:hover,.scenarios button.active{background:#533483;color:#fff}
+  .main{flex:1;display:flex;gap:20px;padding:20px 30px;overflow:auto}
+  .tree-panel{flex:2;background:#16213e;border-radius:12px;border:1px solid #0f3460;padding:20px;position:relative;overflow:auto}
+  .info-side{flex:1;min-width:280px;display:flex;flex-direction:column;gap:16px}
+  .info-panel{background:#16213e;border-radius:12px;border:1px solid #0f3460;padding:20px;flex:1}
+  .info-panel h3{color:#e94560;margin-bottom:10px}
+  .info-panel .step-title{color:#4ecca3;margin-bottom:8px;font-size:.95rem}
+  .info-panel .step-desc{color:#ccc;font-size:.88rem;line-height:1.6}
+  .info-panel .headers{background:#1a1a2e;border-radius:8px;padding:10px 14px;margin-top:10px;font-family:'Courier New',monospace;font-size:.78rem;color:#e94560;white-space:pre-wrap}
+  svg{width:100%;height:100%;min-height:500px}
+  .tree-node{cursor:pointer}
+  .tree-node rect{transition:all .4s;rx:10;ry:10}
+  .tree-node text{font-family:'Segoe UI',sans-serif;fill:#e0e0e0;font-size:13px;text-anchor:middle;pointer-events:none}
+  .tree-node.inactive rect{fill:#1a1a2e;stroke:#333;stroke-width:2}
+  .tree-node.current rect{fill:#16213e;stroke:#e94560;stroke-width:3;filter:drop-shadow(0 0 12px rgba(233,69,96,.5))}
+  .tree-node.yes-path rect{fill:#16213e;stroke:#4ecca3;stroke-width:3;filter:drop-shadow(0 0 8px rgba(78,204,163,.3))}
+  .tree-node.no-path rect{fill:#16213e;stroke:#e94560;stroke-width:3;filter:drop-shadow(0 0 8px rgba(233,69,96,.3))}
+  .tree-node.result-good rect{fill:#1a3a2e;stroke:#4ecca3;stroke-width:3;filter:drop-shadow(0 0 15px rgba(78,204,163,.5))}
+  .tree-node.result-bad rect{fill:#3a1a1e;stroke:#e94560;stroke-width:3;filter:drop-shadow(0 0 15px rgba(233,69,96,.5))}
+  .tree-node.result-warn rect{fill:#3a2a1e;stroke:#f0a030;stroke-width:3;filter:drop-shadow(0 0 15px rgba(240,160,48,.5))}
+  .tree-edge{stroke:#333;stroke-width:2;fill:none;transition:all .4s}
+  .tree-edge.active-yes{stroke:#4ecca3;stroke-width:3;filter:drop-shadow(0 0 6px rgba(78,204,163,.5))}
+  .tree-edge.active-no{stroke:#e94560;stroke-width:3;filter:drop-shadow(0 0 6px rgba(233,69,96,.5))}
+  .edge-label{font-family:'Segoe UI',sans-serif;font-size:12px;font-weight:700;fill:#666;transition:fill .4s}
+  .edge-label.active-yes{fill:#4ecca3}
+  .edge-label.active-no{fill:#e94560}
+  .legend{display:flex;gap:16px;justify-content:center;padding:10px;flex-wrap:wrap}
+  .legend-item{display:flex;align-items:center;gap:6px;font-size:.75rem;color:#999}
+  .legend-dot{width:12px;height:12px;border-radius:3px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Arbre de decision Cache-Control</h1>
+  <div class="scenarios">
+    <button class="active" onclick="loadScenario(0)">1. Cache frais (HIT)</button>
+    <button onclick="loadScenario(1)">2. Stale + 304</button>
+    <button onclick="loadScenario(2)">3. stale-while-revalidate</button>
+  </div>
+  <div class="controls">
+    <button onclick="play()" id="btnPlay">Lecture</button>
+    <button onclick="pause()" id="btnPause">Pause</button>
+    <button onclick="step()" id="btnStep">Etape</button>
+    <button onclick="resetAnim()" id="btnReset">Reset</button>
+  </div>
+</header>
+<div class="main">
+  <div class="tree-panel">
+    <svg id="treeSvg" viewBox="0 0 800 560">
+      <!-- Edges -->
+      <path id="e0-1" class="tree-edge" d="M400,55 L240,115"/>
+      <path id="e0-2" class="tree-edge" d="M400,55 L560,115"/>
+      <path id="e1-3" class="tree-edge" d="M240,155 L140,215"/>
+      <path id="e1-4" class="tree-edge" d="M240,155 L340,215"/>
+      <path id="e4-5" class="tree-edge" d="M340,255 L240,315"/>
+      <path id="e4-6" class="tree-edge" d="M340,255 L440,315"/>
+      <path id="e5-7" class="tree-edge" d="M240,355 L160,415"/>
+      <path id="e5-8" class="tree-edge" d="M240,355 L320,415"/>
+      <!-- Edge labels -->
+      <text id="el0-1" class="edge-label" x="300" y="80">OUI</text>
+      <text id="el0-2" class="edge-label" x="500" y="80">NON</text>
+      <text id="el1-3" class="edge-label" x="170" y="180">OUI</text>
+      <text id="el1-4" class="edge-label" x="310" y="180">NON</text>
+      <text id="el4-5" class="edge-label" x="272" y="280">OUI</text>
+      <text id="el4-6" class="edge-label" x="408" y="280">NON</text>
+      <text id="el5-7" class="edge-label" x="180" y="380">OUI</text>
+      <text id="el5-8" class="edge-label" x="300" y="380">NON</text>
+      <!-- Nodes -->
+      <g id="n0" class="tree-node inactive" transform="translate(400,30)">
+        <rect x="-120" y="0" width="240" height="45"/>
+        <text y="28">La reponse est-elle en cache ?</text>
+      </g>
+      <g id="n1" class="tree-node inactive" transform="translate(240,115)">
+        <rect x="-110" y="0" width="220" height="45"/>
+        <text y="28">Le cache est-il frais ?</text>
+      </g>
+      <g id="n2" class="tree-node inactive" transform="translate(560,115)">
+        <rect x="-110" y="0" width="220" height="45"/>
+        <text y="28">Requete reseau complete</text>
+      </g>
+      <g id="n3" class="tree-node inactive" transform="translate(140,215)">
+        <rect x="-110" y="0" width="220" height="45"/>
+        <text y="28">Servir depuis le cache</text>
+      </g>
+      <g id="n4" class="tree-node inactive" transform="translate(340,215)">
+        <rect x="-120" y="0" width="240" height="45"/>
+        <text y="28">Doit-on revalider ?</text>
+      </g>
+      <g id="n5" class="tree-node inactive" transform="translate(240,315)">
+        <rect x="-130" y="0" width="260" height="45"/>
+        <text y="28">SWR actif (stale-while-revalidate) ?</text>
+      </g>
+      <g id="n6" class="tree-node inactive" transform="translate(440,315)">
+        <rect x="-110" y="0" width="220" height="45"/>
+        <text y="28">Revalidation bloquante</text>
+      </g>
+      <g id="n7" class="tree-node inactive" transform="translate(160,415)">
+        <rect x="-130" y="0" width="260" height="55"/>
+        <text y="22">Servir le stale + revalider</text>
+        <text y="42" style="font-size:11px;fill:#f0a030">en arriere-plan</text>
+      </g>
+      <g id="n8" class="tree-node inactive" transform="translate(320,415)">
+        <rect x="-120" y="0" width="240" height="55"/>
+        <text y="22">304 Not Modified</text>
+        <text y="42" style="font-size:11px;fill:#4ecca3">Rafraichir le cache</text>
+      </g>
+    </svg>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#4ecca3"></div> Chemin OUI</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#e94560"></div> Chemin NON</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#f0a030"></div> Avertissement</div>
+    </div>
+  </div>
+  <div class="info-side">
+    <div class="info-panel" id="infoPanel">
+      <h3>Explication</h3>
+      <div class="step-title" id="stepTitle">Arbre de decision du cache HTTP</div>
+      <div class="step-desc" id="stepDesc">Cet arbre represente les decisions prises par le navigateur lorsqu'il recoit une requete. A chaque noeud, une question est evaluee pour determiner comment servir la reponse. Selectionnez un scenario et lancez l'animation.</div>
+      <div class="headers" id="headersBlock" style="display:none"></div>
+    </div>
+  </div>
+</div>
+<script>
+const scenarios = [
+  {
+    name:"Cache frais - HIT direct",
+    path:[
+      {node:'n0',edge:null,edgeLabel:null,cls:'current',edgeCls:null,title:"Verification du cache",desc:"Le navigateur recoit une requete pour la ressource.\nIl verifie d'abord si une entree existe dans le cache local.",headers:"GET /api/data\nRecherche dans le cache..."},
+      {node:'n0',edge:'e0-1',edgeLabel:'el0-1',cls:'yes-path',edgeCls:'active-yes',title:"OUI - Entree trouvee en cache",desc:"Une entree valide existe dans le cache local.\nLe navigateur doit maintenant verifier la fraicheur.",headers:"Cache-Control: max-age=3600\nDate: il y a 600s\nAge: 600s"},
+      {node:'n1',edge:null,edgeLabel:null,cls:'current',title:"Verification de la fraicheur",desc:"Le navigateur compare l'age du cache avec la valeur max-age.\nAge actuel: 600s, max-age: 3600s.\n600 < 3600 => Le cache est FRAIS !",headers:"max-age: 3600\nAge actuel: 600s\n600 < 3600 => FRAIS"},
+      {node:'n1',edge:'e1-3',edgeLabel:'el1-3',cls:'yes-path',edgeCls:'active-yes',title:"OUI - Le cache est frais",desc:"Le cache n'a pas expire. La reponse peut etre servie directement sans aucune requete reseau.",headers:"Fraicheur restante: 3000s"},
+      {node:'n3',edge:null,edgeLabel:null,cls:'result-good',title:"Servir depuis le cache",desc:"La reponse est servie instantanement depuis le cache local.\nZero latence reseau. Zero bande passante consommee.\nC'est le meilleur scenario possible pour la performance !",headers:"200 OK (from cache)\nTemps: < 1ms\nReseau: 0 octets"}
+    ]
+  },
+  {
+    name:"Stale + revalidation 304",
+    path:[
+      {node:'n0',edge:null,edgeLabel:null,cls:'current',title:"Verification du cache",desc:"Le navigateur recoit une requete.\nIl verifie si une entree existe dans le cache local.",headers:"GET /api/data\nRecherche dans le cache..."},
+      {node:'n0',edge:'e0-1',edgeLabel:'el0-1',cls:'yes-path',edgeCls:'active-yes',title:"OUI - Entree trouvee",desc:"Une entree existe en cache, mais il faut verifier sa fraicheur.",headers:"Cache-Control: max-age=3600\nETag: \"v42\"\nDate: il y a 4000s"},
+      {node:'n1',edge:null,edgeLabel:null,cls:'current',title:"Verification de la fraicheur",desc:"L'age du cache (4000s) depasse max-age (3600s).\nLe cache est PERIME (stale).",headers:"max-age: 3600\nAge actuel: 4000s\n4000 > 3600 => PERIME"},
+      {node:'n1',edge:'e1-4',edgeLabel:'el1-4',cls:'no-path',edgeCls:'active-no',title:"NON - Le cache est perime",desc:"Le cache a expire. Le navigateur doit revalider aupres du serveur d'origine.",headers:"Stale depuis: 400s"},
+      {node:'n4',edge:null,edgeLabel:null,cls:'current',title:"Faut-il revalider ?",desc:"Le navigateur possede un ETag pour cette ressource.\nIl peut envoyer une requete conditionnelle pour verifier si le contenu a change.",headers:"ETag disponible: \"v42\"\n=> Revalidation conditionnelle possible"},
+      {node:'n4',edge:'e4-5',edgeLabel:'el4-5',cls:'yes-path',edgeCls:'active-yes',title:"OUI - Revalidation necessaire",desc:"Le navigateur va envoyer une requete conditionnelle.\nVerifions si stale-while-revalidate est active...",headers:"Envoi requete conditionnelle..."},
+      {node:'n5',edge:null,edgeLabel:null,cls:'current',title:"SWR actif ?",desc:"Pas de directive stale-while-revalidate dans le Cache-Control.\nLa revalidation sera bloquante (le navigateur attend la reponse du serveur).",headers:"Cache-Control: max-age=3600\n(pas de stale-while-revalidate)"},
+      {node:'n5',edge:'e5-8',edgeLabel:'el5-8',cls:'no-path',edgeCls:'active-no',title:"NON - Revalidation bloquante classique",desc:"Sans SWR, le navigateur doit attendre la reponse du serveur avant de servir le contenu.",headers:"If-None-Match: \"v42\"\nAttente de la reponse serveur..."},
+      {node:'n8',edge:null,edgeLabel:null,cls:'result-good',title:"304 Not Modified",desc:"Le serveur confirme que la ressource n'a pas change.\nIl renvoie un 304 sans corps.\nLe navigateur rafraichit le cache et utilise la version locale.\nEconomie de bande passante !",headers:"HTTP/2 304 Not Modified\nETag: \"v42\"\nCache-Control: max-age=3600\n=> Cache rafraichi pour 3600s"}
+    ]
+  },
+  {
+    name:"stale-while-revalidate",
+    path:[
+      {node:'n0',edge:null,edgeLabel:null,cls:'current',title:"Verification du cache",desc:"Le navigateur recoit une requete.\nIl verifie le cache local.",headers:"GET /api/data\nRecherche dans le cache..."},
+      {node:'n0',edge:'e0-1',edgeLabel:'el0-1',cls:'yes-path',edgeCls:'active-yes',title:"OUI - Entree trouvee",desc:"Une entree existe en cache. Verification de la fraicheur...",headers:"Cache-Control: max-age=60, stale-while-revalidate=120\nDate: il y a 90s"},
+      {node:'n1',edge:null,edgeLabel:null,cls:'current',title:"Verification de la fraicheur",desc:"L'age du cache (90s) depasse max-age (60s).\nLe cache est perime, MAIS stale-while-revalidate=120 est actif.",headers:"max-age: 60\nAge: 90s\n90 > 60 => PERIME\nMais SWR window: 60+120 = 180s\n90 < 180 => Dans la fenetre SWR"},
+      {node:'n1',edge:'e1-4',edgeLabel:'el1-4',cls:'no-path',edgeCls:'active-no',title:"NON - Cache perime",desc:"Le cache est techniquement perime mais dans la fenetre SWR.\nLe navigateur doit revalider.",headers:"Stale depuis: 30s\nFenetre SWR: 120s restantes"},
+      {node:'n4',edge:null,edgeLabel:null,cls:'current',title:"Revalidation necessaire",desc:"Oui, la revalidation est necessaire.\nMais grace a stale-while-revalidate, le processus est different...",headers:"stale-while-revalidate: 120\nDans la fenetre SWR: OUI"},
+      {node:'n4',edge:'e4-5',edgeLabel:'el4-5',cls:'yes-path',edgeCls:'active-yes',title:"OUI - Verification SWR",desc:"Le navigateur verifie si la directive stale-while-revalidate est active.",headers:"Cache-Control: max-age=60, stale-while-revalidate=120"},
+      {node:'n5',edge:null,edgeLabel:null,cls:'current',title:"SWR est actif !",desc:"stale-while-revalidate est actif ET nous sommes dans la fenetre autorisee (90s < 60+120=180s).\nLe navigateur va servir la reponse perimee immediatement tout en lancant une revalidation en arriere-plan.",headers:"Age: 90s\nmax-age: 60s\nSWR window: 60+120 = 180s\n90 < 180 => SWR ACTIF"},
+      {node:'n5',edge:'e5-7',edgeLabel:'el5-7',cls:'yes-path',edgeCls:'active-yes',title:"OUI - SWR en action",desc:"Le navigateur sert immediatement le contenu perime a l'utilisateur.",headers:"=> Servir le stale immediatement\n=> Lancer revalidation en background"},
+      {node:'n7',edge:null,edgeLabel:null,cls:'result-warn',title:"Stale servi + revalidation en cours",desc:"Le contenu (potentiellement obsolete) est servi instantanement.\nEn parallele, une requete de revalidation est envoyee au serveur.\nLe cache sera mis a jour pour la prochaine requete.\n\nCompromis : vitesse instantanee vs donnees potentiellement obsoletes de quelques secondes.",headers:"Reponse immediate: 200 OK (stale)\nBackground: GET /api/data\n  If-None-Match: \"v42\"\n=> Cache mis a jour en arriere-plan"}
+    ]
+  }
+];
+
+let currentScenario = 0;
+let currentStep = -1;
+let playing = false;
+let playTimer = null;
+
+function clearTree(){
+  document.querySelectorAll('.tree-node').forEach(n=>n.className='tree-node inactive');
+  document.querySelectorAll('.tree-edge').forEach(e=>e.className='tree-edge');
+  document.querySelectorAll('.edge-label').forEach(e=>e.className='edge-label');
+}
+
+function loadScenario(idx){
+  currentScenario=idx;
+  document.querySelectorAll('.scenarios button').forEach((b,i)=>b.classList.toggle('active',i===idx));
+  resetAnim();
+}
+
+function resetAnim(){
+  pause();
+  currentStep=-1;
+  clearTree();
+  document.getElementById('stepTitle').textContent=scenarios[currentScenario].name;
+  document.getElementById('stepDesc').textContent='Cliquez sur Lecture ou Etape pour parcourir l\'arbre de decision.';
+  const hb=document.getElementById('headersBlock');hb.style.display='none';hb.textContent='';
+}
+
+function goToStep(idx){
+  const s=scenarios[currentScenario];
+  if(idx<0||idx>=s.path.length)return;
+  currentStep=idx;
+  clearTree();
+  // Apply all states up to current
+  for(let i=0;i<=idx;i++){
+    const p=s.path[i];
+    const node=document.getElementById(p.node);
+    if(i===idx){node.className='tree-node '+p.cls;}
+    else{
+      if(p.cls.startsWith('result'))node.className='tree-node '+p.cls;
+      else if(p.cls==='yes-path'||p.cls==='no-path')node.className='tree-node '+p.cls;
+      else node.className='tree-node yes-path';
+    }
+    if(p.edge){document.getElementById(p.edge).classList.add(p.edgeCls);}
+    if(p.edgeLabel){document.getElementById(p.edgeLabel).classList.add(p.edgeCls);}
+  }
+  const st=s.path[idx];
+  document.getElementById('stepTitle').textContent=st.title;
+  document.getElementById('stepDesc').textContent=st.desc;
+  const hb=document.getElementById('headersBlock');
+  hb.style.display='block';
+  hb.textContent=st.headers;
+}
+
+function step(){
+  const s=scenarios[currentScenario];
+  if(currentStep<s.path.length-1)goToStep(currentStep+1);
+}
+
+function play(){
+  if(playing)return;
+  playing=true;
+  document.getElementById('btnPlay').classList.add('active');
+  const tick=()=>{
+    const s=scenarios[currentScenario];
+    if(currentStep<s.path.length-1){step();playTimer=setTimeout(tick,1400);}
+    else{playing=false;document.getElementById('btnPlay').classList.remove('active');}
+  };
+  tick();
+}
+
+function pause(){
+  playing=false;clearTimeout(playTimer);
+  document.getElementById('btnPlay').classList.remove('active');
+}
+</script>
+</body>
+</html>

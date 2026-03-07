@@ -1,0 +1,51 @@
+{
+  "name": "http-caching-course",
+  "version": "1.0.0",
+  "description": "Formation complète HTTP et Caching : du protocole au cache multi-couches (débutant → expert)",
+  "type": "module",
+  "scripts": {
+    "docs:copy-assets": "node scripts/copy-assets.js",
+    "docs:dev": "npm run docs:copy-assets && vitepress dev",
+    "docs:build": "npm run docs:copy-assets && vitepress build",
+    "docs:preview": "vitepress preview",
+    "lab:01": "node labs/lab-01-http-inspector/exercise.js",
+    "lab:02": "node labs/lab-02-http2-multiplexing/exercise.js",
+    "lab:03": "node labs/lab-03-cache-control-lab/exercise.js",
+    "lab:04": "node labs/lab-04-etag-conditional/exercise.js",
+    "lab:05": "node labs/lab-05-swr-implementation/exercise.js",
+    "lab:05:step1": "node labs/lab-05-swr-implementation/exercise-step1.js",
+    "lab:05:step2": "node labs/lab-05-swr-implementation/exercise-step2.js",
+    "lab:05:step3": "node labs/lab-05-swr-implementation/exercise-step3.js",
+    "lab:06": "node labs/lab-06-cache-strategies/exercise.js",
+    "lab:07": "node labs/lab-07-mini-cdn/exercise.js",
+    "lab:08": "node labs/lab-08-reverse-proxy-cache/exercise.js",
+    "lab:09": "node labs/lab-09-multi-layer-cache/exercise.js",
+    "lab:10": "node labs/lab-10-ssr-from-scratch/exercise.js",
+    "lab:11": "node labs/lab-11-isr-implementation/exercise.js",
+    "lab:12": "node labs/lab-12-edge-middleware/exercise.js",
+    "lab:13": "node labs/lab-13-streaming-responses/exercise.js",
+    "lab:14": "node labs/lab-14-performance-audit/exercise.js",
+    "lab:15": "node labs/lab-15-full-architecture/exercise.js",
+    "solution:01": "node labs/lab-01-http-inspector/solution.js",
+    "solution:02": "node labs/lab-02-http2-multiplexing/solution.js",
+    "solution:03": "node labs/lab-03-cache-control-lab/solution.js",
+    "solution:04": "node labs/lab-04-etag-conditional/solution.js",
+    "solution:05": "node labs/lab-05-swr-implementation/solution.js",
+    "solution:06": "node labs/lab-06-cache-strategies/solution.js",
+    "solution:07": "node labs/lab-07-mini-cdn/solution.js",
+    "solution:08": "node labs/lab-08-reverse-proxy-cache/solution.js",
+    "solution:09": "node labs/lab-09-multi-layer-cache/solution.js",
+    "solution:10": "node labs/lab-10-ssr-from-scratch/solution.js",
+    "solution:11": "node labs/lab-11-isr-implementation/solution.js",
+    "solution:12": "node labs/lab-12-edge-middleware/solution.js",
+    "solution:13": "node labs/lab-13-streaming-responses/solution.js",
+    "solution:14": "node labs/lab-14-performance-audit/solution.js",
+    "solution:15": "node labs/lab-15-full-architecture/solution.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.0"
+  }
+}

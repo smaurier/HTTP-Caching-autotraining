@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Timeline SWR animee</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column}
+  header{background:#16213e;padding:18px 30px;border-bottom:2px solid #0f3460;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  header h1{font-size:1.4rem;color:#e94560;letter-spacing:.5px}
+  .controls{display:flex;gap:8px}
+  .controls button{background:#0f3460;color:#e0e0e0;border:1px solid #e94560;padding:7px 18px;border-radius:6px;cursor:pointer;font-size:.85rem;transition:all .2s}
+  .controls button:hover{background:#e94560;color:#fff}
+  .controls button.active{background:#e94560;color:#fff}
+  .scenarios{display:flex;gap:8px;flex-wrap:wrap}
+  .scenarios button{background:#0f3460;color:#e0e0e0;border:1px solid #533483;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:.8rem;transition:all .2s}
+  .scenarios button:hover,.scenarios button.active{background:#533483;color:#fff}
+  .main{flex:1;display:flex;flex-direction:column;padding:20px 30px;gap:16px;overflow:auto}
+
+  /* Timeline visualization */
+  .timeline-viz{background:#16213e;border-radius:12px;border:1px solid #0f3460;padding:24px 20px 20px;position:relative;min-height:340px}
+  .timeline-viz h3{color:#e94560;font-size:.95rem;margin-bottom:20px;text-align:center}
+
+  /* Cache-Control display */
+  .cc-display{text-align:center;margin-bottom:20px;padding:10px;background:#1a1a2e;border-radius:8px;border:1px solid #0f3460;font-family:'Courier New',monospace;font-size:.9rem}
+  .cc-display .directive{color:#e94560}
+  .cc-display .value{color:#4ecca3}
+
+  /* Zone bars */
+  .zone-container{position:relative;margin:0 40px 10px}
+  .zone-bar{display:flex;height:44px;border-radius:8px;overflow:hidden;position:relative}
+  .zone{display:flex;align-items:center;justify-content:center;font-size:.78rem;font-weight:600;position:relative;transition:all .5s}
+  .zone-fresh{background:linear-gradient(135deg,#1a3a2e,#2a5a3e);color:#4ecca3;border:1px solid #4ecca3}
+  .zone-swr{background:linear-gradient(135deg,#3a2a1e,#4a3a1e);color:#f0a030;border:1px solid #f0a030}
+  .zone-expired{background:linear-gradient(135deg,#3a1a1e,#4a1a1e);color:#e94560;border:1px solid #e94560}
+  .zone.highlighted{box-shadow:0 0 25px currentColor;z-index:2;transform:scaleY(1.15)}
+
+  /* Time axis */
+  .time-axis{display:flex;margin:0 40px;position:relative;height:24px}
+  .time-tick{position:absolute;font-size:.65rem;color:#888;transform:translateX(-50%)}
+  .time-tick::before{content:'';position:absolute;top:-6px;left:50%;width:1px;height:6px;background:#555}
+
+  /* Request marker */
+  .request-markers{position:relative;height:60px;margin:10px 40px 0}
+  .req-marker{position:absolute;display:flex;flex-direction:column;align-items:center;transform:translateX(-50%);transition:all .5s}
+  .req-marker .dot{width:16px;height:16px;border-radius:50%;margin-bottom:4px;position:relative}
+  .req-marker .dot::after{content:'';position:absolute;top:-20px;left:50%;width:2px;height:20px;transform:translateX(-50%)}
+  .req-marker .label{font-size:.68rem;white-space:nowrap;font-weight:600}
+  .req-marker.fresh .dot{background:#4ecca3;box-shadow:0 0 12px rgba(78,204,163,.6)}
+  .req-marker.fresh .dot::after{background:#4ecca3}
+  .req-marker.fresh .label{color:#4ecca3}
+  .req-marker.swr .dot{background:#f0a030;box-shadow:0 0 12px rgba(240,160,48,.6)}
+  .req-marker.swr .dot::after{background:#f0a030}
+  .req-marker.swr .label{color:#f0a030}
+  .req-marker.expired .dot{background:#e94560;box-shadow:0 0 12px rgba(233,69,96,.6)}
+  .req-marker.expired .dot::after{background:#e94560}
+  .req-marker.expired .label{color:#e94560}
+  .req-marker.hidden{opacity:0}
+  .req-marker.visible{opacity:1}
+
+  /* Background revalidation indicator */
+  .bg-reval{position:relative;height:36px;margin:0 40px}
+  .bg-bar{position:absolute;height:20px;background:linear-gradient(90deg,#f0a030,#4ecca3);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:600;color:#1a1a2e;opacity:0;transition:all .6s}
+  .bg-bar.visible{opacity:1}
+  .bg-bar::before{content:'';position:absolute;left:-1px;top:50%;width:8px;height:8px;background:#f0a030;border-radius:50%;transform:translateY(-50%)}
+  .bg-bar::after{content:'';position:absolute;right:-1px;top:50%;width:8px;height:8px;background:#4ecca3;border-radius:50%;transform:translateY(-50%)}
+  .bg-label{position:absolute;top:22px;font-size:.62rem;color:#f0a030;white-space:nowrap}
+
+  /* Result card */
+  .result-card{position:relative;margin:8px 40px 0;padding:12px 16px;background:#1a1a2e;border-radius:8px;border:2px solid #333;transition:all .5s;min-height:50px;display:flex;align-items:center;gap:16px}
+  .result-card.hit{border-color:#4ecca3;box-shadow:0 0 15px rgba(78,204,163,.2)}
+  .result-card.swr{border-color:#f0a030;box-shadow:0 0 15px rgba(240,160,48,.2)}
+  .result-card.miss{border-color:#e94560;box-shadow:0 0 15px rgba(233,69,96,.2)}
+  .result-icon{font-size:1.8rem}
+  .result-text{flex:1}
+  .result-text .title{font-weight:700;font-size:.9rem;margin-bottom:2px}
+  .result-text .detail{font-size:.78rem;color:#999}
+  .result-latency{font-size:1.4rem;font-weight:700;font-family:'Courier New',monospace}
+  .result-latency.fast{color:#4ecca3}
+  .result-latency.medium{color:#f0a030}
+  .result-latency.slow{color:#e94560}
+
+  /* Legend */
+  .legend{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;font-size:.75rem;color:#999;margin-top:6px}
+  .legend span{display:flex;align-items:center;gap:5px}
+  .legend .dot{width:12px;height:12px;border-radius:3px}
+
+  /* Info panel */
+  .info-panel{background:#16213e;border-radius:12px;border:1px solid #0f3460;padding:20px 24px;min-height:120px}
+  .info-panel h3{color:#e94560;margin-bottom:8px}
+  .info-panel .step-title{color:#4ecca3;margin-bottom:6px;font-size:.95rem}
+  .info-panel .step-desc{color:#ccc;font-size:.88rem;line-height:1.6;white-space:pre-wrap}
+  .info-panel .headers{background:#1a1a2e;border-radius:8px;padding:10px 14px;margin-top:10px;font-family:'Courier New',monospace;font-size:.78rem;color:#e94560;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<header>
+  <h1>Timeline SWR (stale-while-revalidate)</h1>
+  <div class="scenarios">
+    <button class="active" onclick="loadScenario(0)">1. Requete fraiche</button>
+    <button onclick="loadScenario(1)">2. Fenetre SWR</button>
+    <button onclick="loadScenario(2)">3. SWR expire</button>
+  </div>
+  <div class="controls">
+    <button onclick="play()" id="btnPlay">Lecture</button>
+    <button onclick="doPause()" id="btnPause">Pause</button>
+    <button onclick="doStep()" id="btnStep">Etape</button>
+    <button onclick="doReset()" id="btnReset">Reset</button>
+  </div>
+</header>
+<div class="main">
+  <div class="timeline-viz">
+    <div class="cc-display">
+      <span class="directive">Cache-Control:</span>
+      <span class="value">max-age=<span id="ccMaxAge">60</span>, stale-while-revalidate=<span id="ccSWR">120</span></span>
+    </div>
+
+    <div class="zone-container">
+      <div class="zone-bar" id="zoneBar">
+        <div class="zone zone-fresh" id="zoneFresh" style="width:33.3%">
+          Frais (0-60s)
+        </div>
+        <div class="zone zone-swr" id="zoneSWR" style="width:33.3%">
+          Stale + SWR (60-180s)
+        </div>
+        <div class="zone zone-expired" id="zoneExpired" style="width:33.4%">
+          Expire (>180s)
+        </div>
+      </div>
+    </div>
+
+    <div class="time-axis" id="timeAxis">
+      <span class="time-tick" style="left:0%">0s</span>
+      <span class="time-tick" style="left:16.6%">30s</span>
+      <span class="time-tick" style="left:33.3%">60s</span>
+      <span class="time-tick" style="left:50%">90s</span>
+      <span class="time-tick" style="left:66.6%">120s</span>
+      <span class="time-tick" style="left:83.3%">150s</span>
+      <span class="time-tick" style="left:100%">180s+</span>
+    </div>
+
+    <div class="request-markers" id="requestMarkers">
+      <!-- Dynamic -->
+    </div>
+
+    <div class="bg-reval" id="bgReval">
+      <!-- Dynamic background revalidation bar -->
+    </div>
+
+    <div class="result-card" id="resultCard">
+      <div class="result-icon" id="resultIcon">&#x1F4E6;</div>
+      <div class="result-text">
+        <div class="title" id="resultTitle">En attente de requete...</div>
+        <div class="detail" id="resultDetail">Selectionnez un scenario et lancez l'animation</div>
+      </div>
+      <div class="result-latency" id="resultLatency"></div>
+    </div>
+
+    <div class="legend">
+      <span><div class="dot" style="background:#4ecca3"></div> Frais (max-age)</span>
+      <span><div class="dot" style="background:#f0a030"></div> Stale + SWR actif</span>
+      <span><div class="dot" style="background:#e94560"></div> Expire (SWR depasse)</span>
+      <span><div class="dot" style="background:linear-gradient(90deg,#f0a030,#4ecca3);width:24px"></div> Revalidation en arriere-plan</span>
+    </div>
+  </div>
+
+  <div class="info-panel" id="infoPanel">
+    <h3>Explication</h3>
+    <div class="step-title" id="stepTitle">stale-while-revalidate</div>
+    <div class="step-desc" id="stepDesc">La directive stale-while-revalidate permet au navigateur de servir une reponse perimee immediatement tout en lancant une revalidation en arriere-plan. Cela offre une latence percue quasi-nulle tout en gardant les donnees a jour.
+
+La timeline montre trois zones :
+- Verte : le cache est frais, reponse instantanee
+- Orange : le cache est perime mais dans la fenetre SWR, reponse instantanee (stale) + revalidation en arriere-plan
+- Rouge : le cache est perime ET la fenetre SWR est depassee, revalidation obligatoire et bloquante</div>
+    <div class="headers" id="headersBlock" style="display:none"></div>
+  </div>
+</div>
+<script>
+const scenarios=[
+  {
+    name:"Requete pendant la periode fraiche",
+    maxAge:60,swr:120,
+    steps:[
+      {title:"Requete initiale (t=0s)",desc:"Le navigateur effectue la premiere requete pour la ressource.\nLe serveur repond avec les en-tetes de cache :\n- max-age=60 : la reponse est fraiche pendant 60 secondes\n- stale-while-revalidate=120 : apres expiration, la reponse stale peut etre servie pendant 120 secondes supplementaires en declenchant une revalidation en arriere-plan.",headers:"GET /api/data HTTP/2\n\nHTTP/2 200 OK\nCache-Control: max-age=60, stale-while-revalidate=120\nETag: \"v1\"\nDate: Thu, 07 Mar 2026 10:00:00 GMT",markers:[{pos:0,cls:'fresh visible',label:'Requete initiale'}],zones:[false,false,false],bg:null,result:{cls:'hit',icon:'\u{2705}',title:'200 OK - Reponse du serveur',detail:'Premiere requete, reponse mise en cache','latency':'~250ms',latCls:'slow'}},
+      {title:"Le temps passe... (t=30s)",desc:"30 secondes se sont ecoulees depuis la mise en cache.\nLe cache est toujours dans la zone FRAICHE (30s < 60s max-age).\n\nLa reponse en cache est parfaitement valide.",headers:"Etat du cache:\n  Age: 30s\n  max-age: 60s\n  Fraicheur restante: 30s\n  Zone: FRAICHE",markers:[{pos:0,cls:'fresh visible',label:'t=0'},{pos:16.6,cls:'fresh hidden',label:''}],zones:[true,false,false],bg:null,result:{cls:'',icon:'\u{1F4E6}',title:'Cache en attente...',detail:'30s ecoulees, le cache est toujours frais',latency:'',latCls:''}},
+      {title:"Requete a t=30s (zone fraiche)",desc:"Une nouvelle requete arrive pour la meme ressource.\nLe navigateur verifie le cache : Age=30s, max-age=60s.\n30 < 60 => Le cache est FRAIS !\n\nLa reponse est servie directement depuis le cache.\nAucune requete reseau n'est envoyee.\nAucune revalidation n'est necessaire.\n\nC'est le scenario le plus performant possible.",headers:"Cache lookup:\n  Age: 30s < max-age: 60s\n  => FRAIS\n  => Servir depuis le cache\n  => Aucun reseau\n\n200 OK (from disk cache)\nAge: 30\nTemps: < 1ms",markers:[{pos:0,cls:'fresh visible',label:'t=0'},{pos:16.6,cls:'fresh visible',label:'Requete (t=30s)'}],zones:[true,false,false],bg:null,result:{cls:'hit',icon:'\u{26A1}',title:'Cache HIT - Reponse instantanee',detail:'Le cache est frais, reponse directe sans reseau',latency:'< 1ms',latCls:'fast'}},
+      {title:"Resultat : performance optimale",desc:"La requete est servie en moins de 1 milliseconde.\n\nResume du scenario :\n- Le cache est encore dans sa periode de fraicheur (max-age=60s)\n- La reponse est servie instantanement depuis le cache\n- Zero trafic reseau\n- Zero latence reseau\n- La directive stale-while-revalidate n'a meme pas ete utilisee\n\nC'est exactement le meme comportement qu'un cache sans SWR tant que max-age n'est pas depasse.",headers:"Bilan:\n  Requete a: t=30s\n  Zone: FRAICHE (max-age=60s)\n  Latence: < 1ms\n  Reseau: 0 octets\n  Revalidation: aucune\n\n  SWR aurait ete utilise si:\n  t > 60s ET t < 180s",markers:[{pos:0,cls:'fresh visible',label:'t=0'},{pos:16.6,cls:'fresh visible',label:'HIT (t=30s)'}],zones:[true,false,false],bg:null,result:{cls:'hit',icon:'\u{1F680}',title:'Performance optimale !',detail:'Reponse servie en < 1ms depuis le cache frais',latency:'< 1ms',latCls:'fast'}}
+    ]
+  },
+  {
+    name:"Requete pendant la fenetre SWR",
+    maxAge:60,swr:120,
+    steps:[
+      {title:"Cache mis en place (t=0s)",desc:"La ressource est en cache avec :\n  max-age=60 (frais pendant 60s)\n  stale-while-revalidate=120 (SWR pendant 120s apres expiration)\n\nLa fenetre SWR s'etend donc de 60s a 180s apres la mise en cache.",headers:"Cache-Control: max-age=60, stale-while-revalidate=120\n\nTimeline:\n  [0-60s]   Frais\n  [60-180s] Stale + SWR actif\n  [180s+]   Expire",markers:[{pos:0,cls:'fresh visible',label:'Mise en cache'}],zones:[false,false,false],bg:null,result:{cls:'',icon:'\u{1F4E6}',title:'Cache mis en place',detail:'max-age=60, swr=120',latency:'',latCls:''}},
+      {title:"Le cache expire... (t=60s)",desc:"60 secondes se sont ecoulees. Le cache vient d'expirer (max-age=60s depasse).\n\nSANS stale-while-revalidate, la prochaine requete devrait attendre une revalidation complete.\n\nMAIS avec SWR, nous entrons dans une fenetre de grace de 120 secondes.",headers:"Etat a t=60s:\n  Age: 60s = max-age: 60s\n  => Cache EXPIRE\n  => Entree dans la fenetre SWR\n  => SWR actif pour les 120 prochaines secondes",markers:[{pos:0,cls:'fresh visible',label:'t=0'},{pos:33.3,cls:'swr visible',label:'Expiration (t=60s)'}],zones:[false,true,false],bg:null,result:{cls:'swr',icon:'\u{23F0}',title:'Cache expire - Fenetre SWR ouverte',detail:'Le cache est perime mais SWR est actif pendant 120s',latency:'',latCls:''}},
+      {title:"Requete a t=90s (fenetre SWR)",desc:"Une requete arrive a t=90s.\nAge=90s, max-age=60s => Le cache est PERIME.\nMais 90s < 180s (60+120) => Nous sommes dans la fenetre SWR !\n\nLe navigateur va :\n1. Servir IMMEDIATEMENT la reponse perimee (stale)\n2. Lancer une revalidation en ARRIERE-PLAN\n\nL'utilisateur obtient une reponse instantanee !",headers:"Requete a t=90s:\n  Age: 90s > max-age: 60s => PERIME\n  Mais: 90s < 60+120=180s => SWR ACTIF\n\n=> Reponse IMMEDIATE (stale):\n  200 OK (from cache, stale)\n  Age: 90\n\n=> Background revalidation lancee:\n  GET /api/data\n  If-None-Match: \"v1\"",markers:[{pos:0,cls:'fresh visible',label:'t=0'},{pos:33.3,cls:'swr visible',label:'Expire'},{pos:50,cls:'swr visible',label:'Requete SWR (t=90s)'}],zones:[false,true,false],bg:{left:'50%',width:'15%',label:'Revalidation en arriere-plan'},result:{cls:'swr',icon:'\u{26A1}',title:'Stale servi instantanement + revalidation bg',detail:'Reponse immediate (potentiellement obsolete) + mise a jour en arriere-plan',latency:'< 1ms',latCls:'fast'}},
+      {title:"Revalidation en arriere-plan",desc:"Pendant que l'utilisateur voit le contenu (potentiellement obsolete), le navigateur envoie une requete de revalidation au serveur.\n\nSi le contenu n'a pas change (304 Not Modified) :\n=> Le cache est rafraichi avec un nouveau max-age\n\nSi le contenu a change (200 OK) :\n=> Le cache est remplace par la nouvelle reponse\n\nDans les deux cas, la prochaine requete beneficiera du cache frais.",headers:"Background revalidation:\n  GET /api/data HTTP/2\n  If-None-Match: \"v1\"\n\n  Reponse du serveur:\n  HTTP/2 200 OK (contenu mis a jour)\n  Cache-Control: max-age=60, stale-while-revalidate=120\n  ETag: \"v2\"\n\n=> Cache mis a jour avec la nouvelle version",markers:[{pos:0,cls:'fresh visible',label:'t=0'},{pos:33.3,cls:'swr visible',label:'Expire'},{pos:50,cls:'swr visible',label:'Stale servi'},{pos:58,cls:'fresh visible',label:'Cache MAJ'}],zones:[false,true,false],bg:{left:'50%',width:'8%',label:'Revalidation terminee !'},result:{cls:'hit',icon:'\u{1F504}',title:'Cache mis a jour en arriere-plan',detail:'Nouvelle version stockee, prochaine requete = cache frais',latency:'Invisible',latCls:'fast'}},
+      {title:"Bilan du scenario SWR",desc:"C'est la puissance de stale-while-revalidate :\n\n1. L'utilisateur obtient une reponse INSTANTANEE (< 1ms)\n2. Les donnees sont potentiellement obsoletes de quelques secondes\n3. Le cache est mis a jour en arriere-plan\n4. La prochaine requete servira la version fraiche\n\nCompromis : vitesse instantanee vs donnees legerement obsoletes.\nParfait pour : flux d'actualites, catalogues produits, APIs semi-dynamiques.\nA eviter pour : soldes de comptes, donnees en temps reel critique.",headers:"Bilan SWR:\n  Latence percue: < 1ms (instantane)\n  Fraicheur donnees: stale de ~30s max\n  Revalidation: ~250ms (invisible pour l'user)\n  UX: excellente\n\nCas d'usage ideaux:\n  - Listes de produits\n  - Flux d'articles\n  - Configurations UI\n  - APIs avec tolerance au stale",markers:[{pos:0,cls:'fresh visible',label:'t=0'},{pos:33.3,cls:'swr visible',label:'Expire'},{pos:50,cls:'swr visible',label:'Stale servi'},{pos:58,cls:'fresh visible',label:'MAJ'}],zones:[false,true,false],bg:null,result:{cls:'hit',icon:'\u{1F389}',title:'SWR : le meilleur des deux mondes',detail:'Vitesse du cache + fraicheur de la revalidation',latency:'< 1ms',latCls:'fast'}}
+    ]
+  },
+  {
+    name:"Requete apres expiration SWR",
+    maxAge:60,swr:120,
+    steps:[
+      {title:"Cache mis en place (t=0s)",desc:"La ressource est en cache avec max-age=60 et stale-while-revalidate=120.\nLa fenetre totale de validite (frais + SWR) est de 180 secondes.",headers:"Cache-Control: max-age=60, stale-while-revalidate=120\n\n[0-60s]   Zone fraiche\n[60-180s] Zone SWR\n[>180s]   EXPIRE (aucune grace)",markers:[{pos:0,cls:'fresh visible',label:'Mise en cache'}],zones:[false,false,false],bg:null,result:{cls:'',icon:'\u{1F4E6}',title:'Cache mis en place',detail:'max-age=60, swr=120, fenetre totale: 180s',latency:'',latCls:''}},
+      {title:"Tout a expire... (t=200s)",desc:"200 secondes se sont ecoulees.\n- max-age=60s : depasse depuis 140s\n- SWR window (60+120=180s) : depassee depuis 20s\n\nLe cache est COMPLETEMENT EXPIRE.\nLa fenetre de grace SWR est fermee.\nIl n'est plus autorise de servir le contenu perime.",headers:"Etat a t=200s:\n  Age: 200s\n  max-age: 60s => DEPASSE (+140s)\n  SWR window: 180s => DEPASSE (+20s)\n  => TOTALEMENT EXPIRE\n  => Pas de grace SWR possible",markers:[{pos:0,cls:'fresh visible',label:'t=0'},{pos:33.3,cls:'swr visible',label:'Expire (60s)'},{pos:100,cls:'expired visible',label:'SWR expire (180s+)'}],zones:[false,false,true],bg:null,result:{cls:'miss',icon:'\u{274C}',title:'Cache totalement expire',detail:'max-age ET stale-while-revalidate depasses',latency:'',latCls:''}},
+      {title:"Requete a t=200s (apres SWR)",desc:"Une requete arrive pour la ressource.\nLe cache est totalement expire, y compris la fenetre SWR.\n\nLe navigateur NE PEUT PAS servir le contenu stale.\nIl DOIT effectuer une revalidation BLOQUANTE.\nL'utilisateur doit attendre la reponse du serveur.\n\nC'est comme s'il n'y avait pas de cache du tout (si ce n'est que le navigateur peut envoyer un If-None-Match pour potentiellement obtenir un 304).",headers:"Requete a t=200s:\n  Age: 200s > max-age: 60s => PERIME\n  200s > 60+120=180s => HORS fenetre SWR\n\n=> PAS de reponse stale autorisee\n=> Revalidation BLOQUANTE\n\nGET /api/data HTTP/2\nIf-None-Match: \"v1\"\n=> Attente de la reponse serveur...",markers:[{pos:0,cls:'fresh visible',label:'t=0'},{pos:33.3,cls:'swr visible',label:'Expire'},{pos:100,cls:'expired visible',label:'Requete (t=200s)'}],zones:[false,false,true],bg:null,result:{cls:'miss',icon:'\u{23F3}',title:'Revalidation BLOQUANTE obligatoire',detail:'L\'utilisateur doit attendre la reponse du serveur',latency:'~250ms',latCls:'slow'}},
+      {title:"Reponse du serveur",desc:"Le serveur repond (200 OK ou 304 Not Modified).\nL'utilisateur a du attendre ~250ms pour obtenir la reponse.\n\nLe cache est remis a jour avec une nouvelle fenetre de fraicheur.\nLa prochaine requete beneficiera a nouveau du cycle complet :\nfrais (60s) -> SWR (120s) -> expire.",headers:"Reponse du serveur:\n  HTTP/2 200 OK\n  Cache-Control: max-age=60, stale-while-revalidate=120\n  ETag: \"v3\"\n\n=> Nouveau cycle de cache demarre\n=> Frais jusqu'a t+60s\n=> SWR jusqu'a t+180s",markers:[{pos:0,cls:'fresh visible',label:'t=0'},{pos:33.3,cls:'swr visible',label:'Expire ancien'},{pos:100,cls:'expired visible',label:'Reponse serveur'}],zones:[false,false,true],bg:null,result:{cls:'miss',icon:'\u{1F504}',title:'Nouveau cycle de cache demarre',detail:'Le cache est remis a zero avec une nouvelle fraicheur',latency:'~250ms',latCls:'slow'}},
+      {title:"Bilan : pourquoi optimiser la fenetre SWR",desc:"Ce scenario montre les limites du SWR :\nquand la fenetre SWR est depassee, on retombe sur un comportement classique.\n\nPour eviter ce scenario :\n- Augmenter stale-while-revalidate pour les ressources peu critiques\n- Utiliser des prefetch pour revalider avant l'expiration\n- Adapter max-age et SWR au pattern d'acces de vos utilisateurs\n\nExemple : si vos utilisateurs reviennent toutes les 5 minutes,\nutilisez max-age=60, stale-while-revalidate=300 pour couvrir ce delai.",headers:"Recommandations:\n  Visite frequente (< 5min):\n    max-age=60, swr=300\n  Visite quotidienne:\n    max-age=3600, swr=86400\n  API semi-statique:\n    max-age=300, swr=604800\n\nRegle generale:\n  swr >= intervalle moyen entre visites\n  max-age = fraicheur stricte requise",markers:[{pos:0,cls:'fresh visible',label:'t=0'},{pos:33.3,cls:'swr visible',label:'max-age'},{pos:100,cls:'expired visible',label:'Hors SWR'}],zones:[false,false,true],bg:null,result:{cls:'miss',icon:'\u{1F4A1}',title:'Adaptez SWR a vos patterns d\'usage',detail:'swr >= intervalle moyen entre les visites de vos utilisateurs',latency:'Variable',latCls:'medium'}}
+    ]
+  }
+];
+
+let currentScenario=0,currentStep=-1,playing=false,playTimer=null;
+
+function renderMarkers(markers){
+  const c=document.getElementById('requestMarkers');
+  c.innerHTML='';
+  markers.forEach(m=>{
+    const d=document.createElement('div');
+    d.className='req-marker '+m.cls;
+    d.style.left=m.pos+'%';
+    d.innerHTML=`<div class="dot"></div><div class="label">${m.label}</div>`;
+    c.appendChild(d);
+  });
+}
+
+function renderBg(bg){
+  const c=document.getElementById('bgReval');
+  c.innerHTML='';
+  if(!bg)return;
+  const d=document.createElement('div');
+  d.className='bg-bar visible';
+  d.style.left=bg.left;d.style.width=bg.width;
+  d.textContent=bg.label;
+  c.appendChild(d);
+}
+
+function highlightZones(zones){
+  document.getElementById('zoneFresh').classList.toggle('highlighted',zones[0]);
+  document.getElementById('zoneSWR').classList.toggle('highlighted',zones[1]);
+  document.getElementById('zoneExpired').classList.toggle('highlighted',zones[2]);
+}
+
+function setResult(r){
+  const card=document.getElementById('resultCard');
+  card.className='result-card '+(r.cls||'');
+  document.getElementById('resultIcon').textContent=r.icon||'';
+  document.getElementById('resultTitle').textContent=r.title||'';
+  document.getElementById('resultDetail').textContent=r.detail||'';
+  const lat=document.getElementById('resultLatency');
+  lat.textContent=r.latency||'';
+  lat.className='result-latency '+(r.latCls||'');
+}
+
+function goToStep(idx){
+  const s=scenarios[currentScenario];
+  if(idx<0||idx>=s.steps.length)return;
+  currentStep=idx;
+  const st=s.steps[idx];
+  document.getElementById('ccMaxAge').textContent=s.maxAge;
+  document.getElementById('ccSWR').textContent=s.swr;
+  renderMarkers(st.markers);
+  highlightZones(st.zones);
+  renderBg(st.bg);
+  setResult(st.result);
+  document.getElementById('stepTitle').textContent=st.title;
+  document.getElementById('stepDesc').textContent=st.desc;
+  const hb=document.getElementById('headersBlock');hb.style.display='block';hb.textContent=st.headers;
+}
+
+function loadScenario(idx){
+  currentScenario=idx;
+  document.querySelectorAll('.scenarios button').forEach((b,i)=>b.classList.toggle('active',i===idx));
+  doReset();
+}
+
+function doReset(){
+  doPause();currentStep=-1;
+  highlightZones([false,false,false]);
+  document.getElementById('requestMarkers').innerHTML='';
+  document.getElementById('bgReval').innerHTML='';
+  setResult({cls:'',icon:'\u{1F4E6}',title:'En attente...',detail:'Selectionnez un scenario et lancez l\'animation',latency:'',latCls:''});
+  document.getElementById('stepTitle').textContent=scenarios[currentScenario].name;
+  document.getElementById('stepDesc').textContent='Appuyez sur Lecture ou Etape pour demarrer l\'animation.';
+  document.getElementById('headersBlock').style.display='none';
+}
+
+function doStep(){
+  const s=scenarios[currentScenario];
+  if(currentStep<s.steps.length-1)goToStep(currentStep+1);
+}
+
+function play(){
+  if(playing)return;
+  playing=true;
+  document.getElementById('btnPlay').classList.add('active');
+  const tick=()=>{
+    const s=scenarios[currentScenario];
+    if(currentStep<s.steps.length-1){doStep();playTimer=setTimeout(tick,2200);}
+    else{playing=false;document.getElementById('btnPlay').classList.remove('active');}
+  };tick();
+}
+
+function doPause(){
+  playing=false;clearTimeout(playTimer);
+  document.getElementById('btnPlay').classList.remove('active');
+}
+</script>
+</body>
+</html>
