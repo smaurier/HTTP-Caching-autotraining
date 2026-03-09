@@ -278,22 +278,22 @@ Serveur: 200 OK (JS)                    deja dans le cache !
 Temps: 2 allers-retours                 Temps: 1 aller-retour
 ```
 
-```javascript
+```typescript
 // Exemple conceptuel de server push avec Node.js (HTTP/2)
-const http2 = require('node:http2');
-const fs = require('node:fs');
+import http2, { type ServerHttp2Stream, type IncomingHttpHeaders } from 'node:http2';
+import fs from 'node:fs';
 
 const server = http2.createSecureServer({
   key: fs.readFileSync('server.key'),
   cert: fs.readFileSync('server.cert'),
 });
 
-server.on('stream', (stream, headers) => {
-  const path = headers[':path'];
+server.on('stream', (stream: ServerHttp2Stream, headers: IncomingHttpHeaders) => {
+  const path: string | undefined = headers[':path'] as string | undefined;
 
   if (path === '/index.html') {
     // --- Pousser le CSS avant que le client ne le demande ---
-    stream.pushStream({ ':path': '/style.css' }, (err, pushStream) => {
+    stream.pushStream({ ':path': '/style.css' }, (err: Error | null, pushStream: ServerHttp2Stream) => {
       if (err) return;
       pushStream.respond({
         ':status': 200,
@@ -553,13 +553,13 @@ curl -w "DNS: %{time_namelookup}s\nTCP: %{time_connect}s\nTLS: %{time_appconnect
 
 ### 4.3 Creer un serveur HTTP/2 avec Node.js
 
-```javascript
-// server-http2.js
+```typescript
+// server-http2.ts
 // Serveur HTTP/2 avec Node.js
 
-const http2 = require('node:http2');
-const fs = require('node:fs');
-const path = require('node:path');
+import http2, { type ServerHttp2Stream, type IncomingHttpHeaders } from 'node:http2';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // HTTP/2 NECESSITE TLS (HTTPS) dans les navigateurs
 // Generer un certificat auto-signe pour les tests :
@@ -571,10 +571,10 @@ const server = http2.createSecureServer({
   cert: fs.readFileSync('server.cert'),   // Certificat
 });
 
-server.on('stream', (stream, headers) => {
+server.on('stream', (stream: ServerHttp2Stream, headers: IncomingHttpHeaders) => {
   // En HTTP/2, les headers utilisent des pseudo-headers prefixes par ':'
-  const method = headers[':method'];     // Equivalent de req.method
-  const reqPath = headers[':path'];      // Equivalent de req.url
+  const method: string | undefined = headers[':method'] as string | undefined;
+  const reqPath: string | undefined = headers[':path'] as string | undefined;
 
   console.log(`${method} ${reqPath} (Stream ID: ${stream.id})`);
 

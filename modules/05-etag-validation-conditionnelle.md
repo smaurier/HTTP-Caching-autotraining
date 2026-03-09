@@ -150,18 +150,18 @@ Ces deux pages sont **semantiquement identiques** (meme contenu visible) mais **
 
 ### 2.3 Generer des ETags avec Node.js
 
-```javascript
-// etag-generation.js
+```typescript
+// etag-generation.ts
 // Differentes strategies de generation d'ETag
 
-const http = require('node:http');
-const crypto = require('node:crypto');
+import http from 'node:http';
+import crypto from 'node:crypto';
 
 // === STRATEGIE 1 : Hash du contenu (la plus fiable) ===
-function etagFromContent(content) {
+function etagFromContent(content: string): string {
   // Calcule un hash SHA-256 du contenu
   // Si le contenu est identique, le hash est identique
-  const hash = crypto
+  const hash: string = crypto
     .createHash('sha256')                         // Algorithme SHA-256
     .update(content)                              // Donnees a hasher
     .digest('hex')                                // Resultat en hexadecimal
@@ -170,8 +170,8 @@ function etagFromContent(content) {
 }
 
 // === STRATEGIE 2 : Hash MD5 (plus rapide, moins securise, OK pour ETag) ===
-function etagFromContentMD5(content) {
-  const hash = crypto
+function etagFromContentMD5(content: string): string {
+  const hash: string = crypto
     .createHash('md5')                            // MD5 est plus rapide
     .update(content)
     .digest('base64url');                          // Base64 sans caracteres speciaux
@@ -179,28 +179,28 @@ function etagFromContentMD5(content) {
 }
 
 // === STRATEGIE 3 : Version numerique (simple mais manuelle) ===
-let version = 1;
-function etagFromVersion() {
+let version: number = 1;
+function etagFromVersion(): string {
   return `"v${version}"`;
 }
 
 // === STRATEGIE 4 : Timestamp (pour Last-Modified converti en ETag) ===
-function etagFromTimestamp(lastModified) {
+function etagFromTimestamp(lastModified: Date): string {
   return `"${lastModified.getTime().toString(36)}"`;   // Base36 pour compacite
 }
 
 // === STRATEGIE 5 : Weak ETag (pour du contenu semantiquement equivalent) ===
-function weakEtagFromContent(content) {
+function weakEtagFromContent(content: string): string {
   // Normaliser : supprimer les espaces multiples, les commentaires, etc.
-  const normalized = content.replace(/\s+/g, ' ').replace(/<!--.*?-->/g, '').trim();
-  const hash = crypto.createHash('md5').update(normalized).digest('hex').substring(0, 16);
+  const normalized: string = content.replace(/\s+/g, ' ').replace(/<!--.*?-->/g, '').trim();
+  const hash: string = crypto.createHash('md5').update(normalized).digest('hex').substring(0, 16);
   return `W/"${hash}"`;                           // Prefixe W/ pour weak
 }
 
 // === DEMONSTRATION ===
-const content1 = '<html><body><h1>Bonjour</h1></body></html>';
-const content2 = '<html><body><h1>Bonjour</h1></body></html>';  // Identique
-const content3 = '<html><body><h1>Bonsoir</h1></body></html>';  // Different
+const content1: string = '<html><body><h1>Bonjour</h1></body></html>';
+const content2: string = '<html><body><h1>Bonjour</h1></body></html>';  // Identique
+const content3: string = '<html><body><h1>Bonsoir</h1></body></html>';  // Different
 
 console.log('=== Demonstration de generation d\'ETag ===\n');
 
@@ -214,8 +214,8 @@ console.log('Timestamp :', etagFromTimestamp(new Date()));
 console.log('Weak :', weakEtagFromContent(content1));
 
 // Un contenu avec des espaces differents mais semantiquement identique
-const contentA = '<html>  <body>  <h1>Bonjour</h1>  </body>  </html>';
-const contentB = '<html><body><h1>Bonjour</h1></body></html>';
+const contentA: string = '<html>  <body>  <h1>Bonjour</h1>  </body>  </html>';
+const contentB: string = '<html><body><h1>Bonjour</h1></body></html>';
 console.log('\n=== Weak ETag et espaces ===');
 console.log('Strong A :', etagFromContent(contentA));   // Different de B
 console.log('Strong B :', etagFromContent(contentB));   // Different de A
@@ -472,15 +472,22 @@ conditionnels)      OUI         NON
 
 ### 5.1 Serveur avec ETag et validation conditionnelle
 
-```javascript
-// server-etag-complete.js
+```typescript
+// server-etag-complete.ts
 // Serveur HTTP avec gestion complete de ETag et validation conditionnelle
 
-const http = require('node:http');
-const crypto = require('node:crypto');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import crypto from 'node:crypto';
+
+interface Article {
+  id: number;
+  title: string;
+  content: string;
+  updatedAt: Date;
+}
 
 // --- Simuler une base de donnees ---
-const database = {
+const database: { articles: Record<number, Article> } = {
   articles: {
     1: { id: 1, title: 'Introduction au caching HTTP', content: 'Le cache HTTP est...', updatedAt: new Date('2026-01-15') },
     2: { id: 2, title: 'Les headers essentiels', content: 'Cache-Control est...', updatedAt: new Date('2026-02-20') },
@@ -489,9 +496,9 @@ const database = {
 };
 
 // --- Fonction pour generer un ETag a partir du contenu ---
-function generateETag(data) {
-  const json = JSON.stringify(data);
-  const hash = crypto
+function generateETag(data: unknown): string {
+  const json: string = JSON.stringify(data);
+  const hash: string = crypto
     .createHash('md5')          // Hash MD5 (suffisant pour un ETag)
     .update(json)               // Hasher le contenu JSON
     .digest('hex')              // Resultat en hexadecimal
@@ -500,19 +507,19 @@ function generateETag(data) {
 }
 
 // --- Fonction pour formater une date HTTP ---
-function formatHttpDate(date) {
+function formatHttpDate(date: Date): string {
   return date.toUTCString();    // "Thu, 07 Mar 2026 10:30:00 GMT"
 }
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   const { method, url } = req;
 
   // --- Router ---
-  const match = url.match(/^\/api\/articles\/(\d+)$/);
+  const match: RegExpMatchArray | null = (url ?? '').match(/^\/api\/articles\/(\d+)$/);
 
   if (method === 'GET' && match) {
-    const id = parseInt(match[1]);
-    const article = database.articles[id];
+    const id: number = parseInt(match[1]);
+    const article: Article | undefined = database.articles[id];
 
     // 404 si l'article n'existe pas
     if (!article) {
@@ -521,14 +528,14 @@ const server = http.createServer((req, res) => {
     }
 
     // --- Generer les validateurs ---
-    const etag = generateETag(article);
-    const lastModified = formatHttpDate(article.updatedAt);
+    const etag: string = generateETag(article);
+    const lastModified: string = formatHttpDate(article.updatedAt);
 
     // --- Verification conditionnelle : If-None-Match (ETag) ---
-    const ifNoneMatch = req.headers['if-none-match'];
+    const ifNoneMatch: string | undefined = req.headers['if-none-match'];
     if (ifNoneMatch) {
       // Le client peut envoyer plusieurs ETags : "v1", "v2", "v3"
-      const clientETags = ifNoneMatch.split(',').map(e => e.trim());
+      const clientETags: string[] = ifNoneMatch.split(',').map(e => e.trim());
 
       if (clientETags.includes(etag)) {
         // L'ETag correspond ! Le contenu n'a pas change.
@@ -543,11 +550,11 @@ const server = http.createServer((req, res) => {
     }
 
     // --- Verification conditionnelle : If-Modified-Since (date) ---
-    const ifModifiedSince = req.headers['if-modified-since'];
+    const ifModifiedSince: string | undefined = req.headers['if-modified-since'];
     if (ifModifiedSince && !ifNoneMatch) {
       // On ne verifie If-Modified-Since que si If-None-Match est absent
       // (ETag est prioritaire selon la spec)
-      const clientDate = new Date(ifModifiedSince);
+      const clientDate: Date = new Date(ifModifiedSince);
       if (article.updatedAt <= clientDate) {
         // Pas modifie depuis la date du client
         console.log(`[304] Article ${id} - Not modified since ${ifModifiedSince}`);
@@ -561,7 +568,7 @@ const server = http.createServer((req, res) => {
     }
 
     // --- Reponse complete (200 OK) ---
-    const body = JSON.stringify(article);
+    const body: string = JSON.stringify(article);
     console.log(`[200] Article ${id} - Envoi complet (${Buffer.byteLength(body)} octets)`);
 
     res.writeHead(200, {
@@ -577,11 +584,11 @@ const server = http.createServer((req, res) => {
 
   // --- Liste des articles ---
   else if (method === 'GET' && url === '/api/articles') {
-    const articles = Object.values(database.articles);
-    const body = JSON.stringify(articles);
-    const etag = generateETag(articles);
+    const articles: Article[] = Object.values(database.articles);
+    const body: string = JSON.stringify(articles);
+    const etag: string = generateETag(articles);
 
-    const ifNoneMatch = req.headers['if-none-match'];
+    const ifNoneMatch: string | undefined = req.headers['if-none-match'];
     if (ifNoneMatch && ifNoneMatch.includes(etag)) {
       res.writeHead(304, { 'ETag': etag, 'Cache-Control': 'public, max-age=30' });
       return res.end();
@@ -597,19 +604,19 @@ const server = http.createServer((req, res) => {
 
   // --- Mettre a jour un article (pour tester que l'ETag change) ---
   else if (method === 'PUT' && match) {
-    const id = parseInt(match[1]);
-    let body = '';
-    req.on('data', chunk => body += chunk);
+    const id: number = parseInt(match[1]);
+    let body: string = '';
+    req.on('data', (chunk: Buffer) => body += chunk);
     req.on('end', () => {
       try {
-        const updates = JSON.parse(body);
+        const updates: Partial<Article> = JSON.parse(body);
         if (database.articles[id]) {
           database.articles[id] = {
             ...database.articles[id],
             ...updates,
             updatedAt: new Date(),   // Met a jour la date de modification
           };
-          const newEtag = generateETag(database.articles[id]);
+          const newEtag: string = generateETag(database.articles[id]);
           console.log(`[200] Article ${id} mis a jour - Nouvel ETag: ${newEtag}`);
           res.writeHead(200, {
             'Content-Type': 'application/json',
@@ -751,19 +758,19 @@ Economie serveur: ~80% de CPU et I/O en moins !
 
 ### 7.1 Serveur de fichiers avec ETag automatique
 
-```javascript
-// server-static-etag.js
+```typescript
+// server-static-etag.ts
 // Serveur de fichiers statiques avec ETag et Last-Modified
 
-const http = require('node:http');
-const fs = require('node:fs');
-const path = require('node:path');
-const crypto = require('node:crypto');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 
-const STATIC_DIR = path.join(__dirname, 'public');
+const STATIC_DIR: string = path.join(__dirname, 'public');
 
 // Types MIME courants
-const MIME_TYPES = {
+const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css',
   '.js': 'application/javascript',
@@ -775,18 +782,18 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon',
 };
 
-function getContentType(filePath) {
-  const ext = path.extname(filePath);
+function getContentType(filePath: string): string {
+  const ext: string = path.extname(filePath);
   return MIME_TYPES[ext] || 'application/octet-stream';
 }
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   // Securite : empecher les traversals de repertoire
-  const safePath = path.normalize(req.url).replace(/^(\.\.[\/\\])+/, '');
-  const filePath = path.join(STATIC_DIR, safePath === '/' ? 'index.html' : safePath);
+  const safePath: string = path.normalize(req.url ?? '/').replace(/^(\.\.[\/\\])+/, '');
+  const filePath: string = path.join(STATIC_DIR, safePath === '/' ? 'index.html' : safePath);
 
   // Verifier que le fichier existe
-  fs.stat(filePath, (err, stats) => {
+  fs.stat(filePath, (err: NodeJS.ErrnoException | null, stats: fs.Stats) => {
     if (err || !stats.isFile()) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       return res.end('Fichier non trouve');
@@ -794,14 +801,14 @@ const server = http.createServer((req, res) => {
 
     // --- Generer les validateurs ---
     // ETag base sur la taille + date de modification (methode rapide)
-    const etag = `"${stats.size.toString(16)}-${stats.mtimeMs.toString(16)}"`;
-    const lastModified = stats.mtime.toUTCString();
+    const etag: string = `"${stats.size.toString(16)}-${stats.mtimeMs.toString(16)}"`;
+    const lastModified: string = stats.mtime.toUTCString();
 
     // --- Determiner la strategie de cache selon le type de fichier ---
-    const ext = path.extname(filePath);
-    let cacheControl;
+    const ext: string = path.extname(filePath);
+    let cacheControl: string;
 
-    if (req.url.match(/\.[a-f0-9]{8,}\./)) {
+    if ((req.url ?? '').match(/\.[a-f0-9]{8,}\./)) {
       // Fichier avec hash dans le nom (ex: app.a1b2c3d4.js)
       cacheControl = 'public, max-age=31536000, immutable';
     } else if (['.html'].includes(ext)) {
@@ -818,8 +825,8 @@ const server = http.createServer((req, res) => {
     }
 
     // --- Verification conditionnelle ---
-    const ifNoneMatch = req.headers['if-none-match'];
-    const ifModifiedSince = req.headers['if-modified-since'];
+    const ifNoneMatch: string | undefined = req.headers['if-none-match'];
+    const ifModifiedSince: string | undefined = req.headers['if-modified-since'];
 
     // Priorite 1 : If-None-Match (ETag)
     if (ifNoneMatch && ifNoneMatch === etag) {
@@ -834,7 +841,7 @@ const server = http.createServer((req, res) => {
 
     // Priorite 2 : If-Modified-Since
     if (ifModifiedSince && !ifNoneMatch) {
-      const clientDate = new Date(ifModifiedSince);
+      const clientDate: Date = new Date(ifModifiedSince);
       if (stats.mtime <= clientDate) {
         console.log(`[304] ${req.url} (Not modified since)`);
         res.writeHead(304, {
@@ -858,7 +865,7 @@ const server = http.createServer((req, res) => {
     });
 
     // Streamer le fichier (efficace pour les gros fichiers)
-    const readStream = fs.createReadStream(filePath);
+    const readStream: fs.ReadStream = fs.createReadStream(filePath);
     readStream.pipe(res);
   });
 });
@@ -1135,24 +1142,30 @@ curl -v -H 'If-None-Match: "<ancien-etag>"' http://localhost:3000/api/todos
 <details>
 <summary>Solution</summary>
 
-```javascript
-const http = require('node:http');
-const crypto = require('node:crypto');
+```typescript
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import crypto from 'node:crypto';
 
-const todos = [
+interface Todo {
+  id: number;
+  title: string;
+  done: boolean;
+}
+
+const todos: Todo[] = [
   { id: 1, title: 'Lire le Module 05', done: false },
   { id: 2, title: 'Comprendre les ETags', done: false },
 ];
-let nextId = 3;
+let nextId: number = 3;
 
-function etag(data) {
-  const hash = crypto.createHash('md5').update(JSON.stringify(data)).digest('hex').substring(0, 16);
+function etag(data: unknown): string {
+  const hash: string = crypto.createHash('md5').update(JSON.stringify(data)).digest('hex').substring(0, 16);
   return `"${hash}"`;
 }
 
-function checkETag(req, res, data, cacheControl) {
-  const tag = etag(data);
-  const ifNoneMatch = req.headers['if-none-match'];
+function checkETag(req: IncomingMessage, res: ServerResponse, data: unknown, cacheControl: string): boolean {
+  const tag: string = etag(data);
+  const ifNoneMatch: string | undefined = req.headers['if-none-match'];
   if (ifNoneMatch && ifNoneMatch === tag) {
     console.log(`[304] ${req.url}`);
     res.writeHead(304, { 'ETag': tag, 'Cache-Control': cacheControl });
@@ -1162,20 +1175,20 @@ function checkETag(req, res, data, cacheControl) {
   return false;
 }
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   const { method, url } = req;
-  const match = url.match(/^\/api\/todos\/(\d+)$/);
+  const match: RegExpMatchArray | null = (url ?? '').match(/^\/api\/todos\/(\d+)$/);
   const json = { 'Content-Type': 'application/json' };
 
   if (method === 'GET' && url === '/api/todos') {
     if (checkETag(req, res, todos, 'public, max-age=10')) return;
     console.log(`[200] ${url}`);
-    const body = JSON.stringify(todos);
+    const body: string = JSON.stringify(todos);
     res.writeHead(200, { ...json, 'ETag': etag(todos), 'Cache-Control': 'public, max-age=10' });
     res.end(body);
   }
   else if (method === 'GET' && match) {
-    const todo = todos.find(t => t.id === parseInt(match[1]));
+    const todo: Todo | undefined = todos.find(t => t.id === parseInt(match[1]));
     if (!todo) { res.writeHead(404, json); return res.end('{"error":"Not found"}'); }
     if (checkETag(req, res, todo, 'public, max-age=30')) return;
     console.log(`[200] ${url}`);
@@ -1183,30 +1196,30 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(todo));
   }
   else if (method === 'POST' && url === '/api/todos') {
-    let body = '';
-    req.on('data', c => body += c);
+    let body: string = '';
+    req.on('data', (c: Buffer) => body += c);
     req.on('end', () => {
-      const data = JSON.parse(body);
-      const todo = { id: nextId++, title: data.title, done: false };
+      const data: { title: string } = JSON.parse(body);
+      const todo: Todo = { id: nextId++, title: data.title, done: false };
       todos.push(todo);
       res.writeHead(201, { ...json, 'Location': `/api/todos/${todo.id}` });
       res.end(JSON.stringify(todo));
     });
   }
   else if (method === 'PUT' && match) {
-    let body = '';
-    req.on('data', c => body += c);
+    let body: string = '';
+    req.on('data', (c: Buffer) => body += c);
     req.on('end', () => {
-      const idx = todos.findIndex(t => t.id === parseInt(match[1]));
+      const idx: number = todos.findIndex(t => t.id === parseInt(match[1]));
       if (idx === -1) { res.writeHead(404, json); return res.end('{"error":"Not found"}'); }
-      const data = JSON.parse(body);
+      const data: Partial<Todo> = JSON.parse(body);
       todos[idx] = { ...todos[idx], ...data };
       res.writeHead(200, { ...json, 'ETag': etag(todos[idx]) });
       res.end(JSON.stringify(todos[idx]));
     });
   }
   else if (method === 'DELETE' && match) {
-    const idx = todos.findIndex(t => t.id === parseInt(match[1]));
+    const idx: number = todos.findIndex(t => t.id === parseInt(match[1]));
     if (idx === -1) { res.writeHead(404, json); return res.end('{"error":"Not found"}'); }
     todos.splice(idx, 1);
     res.writeHead(204);

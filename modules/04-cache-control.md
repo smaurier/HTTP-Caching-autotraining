@@ -78,15 +78,15 @@ Revalidation   = demander au serveur si la copie stale est encore bonne
 | **Stale**   | Age >= max-age                   | Revalider aupres du serveur              |
 | **Absent**  | Pas dans le cache                | Requete complete au serveur              |
 
-```javascript
+```typescript
 // Exemple : observer l'age d'une reponse
-const http = require('node:http');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
-const CONTENT = '<html><body><h1>Page cachee</h1></body></html>';
-const START = Date.now();
+const CONTENT: string = '<html><body><h1>Page cachee</h1></body></html>';
+const START: number = Date.now();
 
-const server = http.createServer((req, res) => {
-  const age = Math.floor((Date.now() - START) / 1000);  // Secondes depuis le demarrage
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+  const age: number = Math.floor((Date.now() - START) / 1000);  // Secondes depuis le demarrage
 
   console.log(`Requete recue a t+${age}s`);
 
@@ -285,19 +285,19 @@ Requete 3:
   Serveur --> Client: 200 OK
 ```
 
-```javascript
+```typescript
 // Comparaison no-cache vs no-store en Node.js
-const http = require('node:http');
-const crypto = require('node:crypto');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import crypto from 'node:crypto';
 
-let data = { value: 'initial', version: 1 };
+let data: { value: string; version: number } = { value: 'initial', version: 1 };
 
-const server = http.createServer((req, res) => {
-  const etag = `"v${data.version}"`;
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+  const etag: string = `"v${data.version}"`;
 
   if (req.url === '/no-cache') {
     // --- no-cache : stocke mais revalide toujours ---
-    const clientETag = req.headers['if-none-match'];
+    const clientETag: string | undefined = req.headers['if-none-match'];
     if (clientETag === etag) {
       console.log('/no-cache : 304 (revalidation reussie, pas de body)');
       res.writeHead(304, { 'ETag': etag, 'Cache-Control': 'no-cache' });
@@ -516,15 +516,15 @@ La ressource contient des donnees personnelles ?
 
 ### 4.2 Recettes pour chaque type de ressource
 
-```javascript
-// server-cache-strategies.js
+```typescript
+// server-cache-strategies.ts
 // Serveur demonstrant les strategies de cache courantes
 
-const http = require('node:http');
-const crypto = require('node:crypto');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import crypto from 'node:crypto';
 
-const server = http.createServer((req, res) => {
-  const url = req.url;
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+  const url: string = req.url ?? '/';
 
   // === 1. ASSETS STATIQUES AVEC HASH ===
   // Fichiers JS/CSS avec un hash dans le nom
@@ -542,8 +542,8 @@ const server = http.createServer((req, res) => {
   // === 2. PAGE HTML DYNAMIQUE ===
   // Change souvent, mais on peut tolerer 1 minute de retard
   if (url === '/' || url === '/index.html') {
-    const html = `<html><body><h1>Page dynamique</h1><p>${new Date().toISOString()}</p></body></html>`;
-    const etag = `"${crypto.createHash('md5').update(html).digest('hex')}"`;
+    const html: string = `<html><body><h1>Page dynamique</h1><p>${new Date().toISOString()}</p></body></html>`;
+    const etag: string = `"${crypto.createHash('md5').update(html).digest('hex')}"`;
 
     // Revalidation conditionnelle
     if (req.headers['if-none-match'] === etag) {

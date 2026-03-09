@@ -400,13 +400,13 @@ curl -w "\nDNS: %{time_namelookup}s\nConnect: %{time_connect}s\nTLS: %{time_appc
 
 Tout au long de ce cours, nous utiliserons Node.js pour creer des serveurs HTTP et experimenter avec le cache.
 
-```javascript
-// server-basic.js
+```typescript
+// server-basic.ts
 // Un serveur HTTP minimal en Node.js
 
-const http = require('node:http');  // Module HTTP natif de Node.js
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   // req = la requete recue (ce que le client envoie)
   // res = la reponse a envoyer (ce que le serveur repond)
 
@@ -467,15 +467,15 @@ curl --version
 
 Cree ce fichier et lance-le :
 
-```javascript
-// observe-cache.js
-const http = require('node:http');
+```typescript
+// observe-cache.ts
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
-let requestCount = 0;  // Compteur de requetes
+let requestCount: number = 0;  // Compteur de requetes
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   requestCount++;
-  const now = new Date().toISOString();
+  const now: string = new Date().toISOString();
 
   console.log(`[${now}] Requete #${requestCount}: ${req.method} ${req.url}`);
 

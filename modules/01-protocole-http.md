@@ -59,13 +59,13 @@ Methode       Chemin (URI)     Version du protocole
 
 ### 1.3 Voir une requete avec Node.js
 
-```javascript
-// inspect-request.js
+```typescript
+// inspect-request.ts
 // Ce serveur affiche tous les details de chaque requete recue
 
-const http = require('node:http');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   // --- LIGNE DE REQUETE ---
   console.log('=== NOUVELLE REQUETE ===');
   console.log(`Methode  : ${req.method}`);       // GET, POST, etc.
@@ -79,9 +79,9 @@ const server = http.createServer((req, res) => {
   }
 
   // --- BODY ---
-  let body = '';
-  req.on('data', (chunk) => {       // Les donnees arrivent par morceaux
-    body += chunk.toString();        // On les concatene
+  let body: string = '';
+  req.on('data', (chunk: Buffer) => {       // Les donnees arrivent par morceaux
+    body += chunk.toString();               // On les concatene
   });
   req.on('end', () => {             // Quand tout est recu
     if (body) {
@@ -181,13 +181,13 @@ Version       Code       Phrase descriptive
 
 ### 2.3 Construire une reponse avec Node.js
 
-```javascript
-// response-builder.js
+```typescript
+// response-builder.ts
 // Differentes facons de construire une reponse HTTP
 
-const http = require('node:http');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
 
   if (req.url === '/html') {
     // --- Reponse HTML ---
@@ -199,8 +199,8 @@ const server = http.createServer((req, res) => {
 
   } else if (req.url === '/json') {
     // --- Reponse JSON ---
-    const data = { message: 'Bonjour', timestamp: Date.now() };
-    const json = JSON.stringify(data);
+    const data: { message: string; timestamp: number } = { message: 'Bonjour', timestamp: Date.now() };
+    const json: string = JSON.stringify(data);
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Content-Length': Buffer.byteLength(json),    // Taille en octets
@@ -270,10 +270,10 @@ Accept: application/json
 - C'est la methode par defaut du navigateur quand tu tapes une URL
 - **C'est la principale methode concernee par le cache HTTP**
 
-```javascript
+```typescript
 // Cote serveur Node.js
 if (req.method === 'GET' && req.url === '/api/articles/42') {
-  const article = { id: 42, title: 'Mon article', content: '...' };
+  const article: { id: number; title: string; content: string } = { id: 42, title: 'Mon article', content: '...' };
   res.writeHead(200, {
     'Content-Type': 'application/json',
     'Cache-Control': 'max-age=300',   // Cacher 5 minutes
@@ -396,7 +396,7 @@ Content-Type: text/html
 | 201  | Created              | Ressource creee avec succes (POST)           |
 | 204  | No Content           | Reussi, mais pas de body a renvoyer          |
 
-```javascript
+```typescript
 // Exemples de reponses 2xx en Node.js
 
 // 200 OK — Reponse standard
@@ -407,7 +407,7 @@ if (req.method === 'GET') {
 
 // 201 Created — Apres creation d'une ressource
 if (req.method === 'POST') {
-  const newUser = { id: 99, name: 'Alice' };
+  const newUser: { id: number; name: string } = { id: 99, name: 'Alice' };
   res.writeHead(201, {
     'Content-Type': 'application/json',
     'Location': '/api/users/99',     // URL de la nouvelle ressource
@@ -456,16 +456,16 @@ CLIENT                                    SERVEUR
 
 **Pourquoi 304 est genial ?** La reponse fait typiquement **~200 octets** au lieu de potentiellement **des megaoctets**. On economise de la bande passante ET du temps.
 
-```javascript
+```typescript
 // Serveur qui repond 304 quand rien n'a change
-const http = require('node:http');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
-const CURRENT_ETAG = '"page-v5"';
-const PAGE_CONTENT = '<html><body><h1>Contenu de la page</h1></body></html>';
+const CURRENT_ETAG: string = '"page-v5"';
+const PAGE_CONTENT: string = '<html><body><h1>Contenu de la page</h1></body></html>';
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   // Verifier si le client a deja la bonne version
-  const clientETag = req.headers['if-none-match'];
+  const clientETag: string | undefined = req.headers['if-none-match'];
 
   if (clientETag === CURRENT_ETAG) {
     // Le client a deja la bonne version !
@@ -670,26 +670,32 @@ NAVIGATEUR                              SERVEUR (example.com)
 
 ### 6.1 Mini-API avec routing et status codes
 
-```javascript
-// mini-api.js
+```typescript
+// mini-api.ts
 // Une API HTTP complete avec gestion des methodes et status codes
 
-const http = require('node:http');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+
+interface Article {
+  id: number;
+  title: string;
+  content: string;
+}
 
 // Base de donnees en memoire
-const articles = [
+const articles: Article[] = [
   { id: 1, title: 'Premier article', content: 'Contenu du premier article' },
   { id: 2, title: 'Deuxieme article', content: 'Contenu du deuxieme article' },
 ];
-let nextId = 3;
+let nextId: number = 3;
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   const { method, url } = req;
 
   // --- Parser l'URL ---
-  const urlParts = url.split('/').filter(Boolean);  // ['api', 'articles', '42']
-  const isArticlesRoute = urlParts[0] === 'api' && urlParts[1] === 'articles';
-  const articleId = urlParts[2] ? parseInt(urlParts[2]) : null;
+  const urlParts: string[] = (url ?? '').split('/').filter(Boolean);  // ['api', 'articles', '42']
+  const isArticlesRoute: boolean = urlParts[0] === 'api' && urlParts[1] === 'articles';
+  const articleId: number | null = urlParts[2] ? parseInt(urlParts[2]) : null;
 
   // Header commun pour JSON
   const jsonHeaders = { 'Content-Type': 'application/json; charset=utf-8' };
@@ -706,7 +712,7 @@ const server = http.createServer((req, res) => {
 
   // --- GET /api/articles/:id ---
   if (method === 'GET' && isArticlesRoute && articleId) {
-    const article = articles.find(a => a.id === articleId);
+    const article: Article | undefined = articles.find(a => a.id === articleId);
     if (!article) {
       res.writeHead(404, jsonHeaders);        // 404 : pas trouve
       res.end(JSON.stringify({ error: 'Article introuvable' }));
@@ -723,17 +729,17 @@ const server = http.createServer((req, res) => {
 
   // --- POST /api/articles ---
   if (method === 'POST' && isArticlesRoute) {
-    let body = '';
-    req.on('data', chunk => body += chunk);
+    let body: string = '';
+    req.on('data', (chunk: Buffer) => body += chunk);
     req.on('end', () => {
       try {
-        const data = JSON.parse(body);
+        const data: { title?: string; content?: string } = JSON.parse(body);
         if (!data.title) {
           res.writeHead(400, jsonHeaders);    // 400 : requete invalide
           res.end(JSON.stringify({ error: 'Le titre est requis' }));
           return;
         }
-        const newArticle = { id: nextId++, title: data.title, content: data.content || '' };
+        const newArticle: Article = { id: nextId++, title: data.title, content: data.content || '' };
         articles.push(newArticle);
         res.writeHead(201, {                  // 201 : cree avec succes
           ...jsonHeaders,
@@ -750,7 +756,7 @@ const server = http.createServer((req, res) => {
 
   // --- DELETE /api/articles/:id ---
   if (method === 'DELETE' && isArticlesRoute && articleId) {
-    const index = articles.findIndex(a => a.id === articleId);
+    const index: number = articles.findIndex(a => a.id === articleId);
     if (index === -1) {
       res.writeHead(404, jsonHeaders);
       res.end(JSON.stringify({ error: 'Article introuvable' }));
@@ -936,10 +942,10 @@ curl -v http://localhost:3000/nexiste-pas
 <details>
 <summary>Solution</summary>
 
-```javascript
-const http = require('node:http');
+```typescript
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   const { method, url } = req;
 
   if (method === 'GET' && url === '/') {
@@ -947,7 +953,7 @@ const server = http.createServer((req, res) => {
     res.end('Bienvenue sur le serveur !');
   }
   else if (method === 'GET' && url === '/secret') {
-    const auth = req.headers['authorization'];
+    const auth: string | undefined = req.headers['authorization'];
     if (!auth) {
       res.writeHead(401, { 'WWW-Authenticate': 'Bearer' });
       res.end('Authentification requise');
@@ -960,8 +966,8 @@ const server = http.createServer((req, res) => {
     }
   }
   else if (method === 'POST' && url === '/data') {
-    let body = '';
-    req.on('data', c => body += c);
+    let body: string = '';
+    req.on('data', (c: Buffer) => body += c);
     req.on('end', () => {
       try {
         if (!body) throw new Error('Body vide');

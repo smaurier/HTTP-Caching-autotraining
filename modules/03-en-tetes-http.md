@@ -126,13 +126,13 @@ Content-Type: type/sous-type; parametre=valeur
 | `application/pdf`                     | Document PDF                    |
 | `multipart/form-data`                 | Formulaire avec fichiers        |
 
-```javascript
-// server-content-types.js
+```typescript
+// server-content-types.ts
 // Serveur qui repond avec differents Content-Types
 
-const http = require('node:http');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
 
   if (req.url === '/html') {
     // --- Reponse HTML ---
@@ -143,8 +143,8 @@ const server = http.createServer((req, res) => {
   }
   else if (req.url === '/json') {
     // --- Reponse JSON ---
-    const data = { message: 'Bonjour', items: [1, 2, 3] };
-    const body = JSON.stringify(data);
+    const data: { message: string; items: number[] } = { message: 'Bonjour', items: [1, 2, 3] };
+    const body: string = JSON.stringify(data);
     res.writeHead(200, {
       'Content-Type': 'application/json',   // Le navigateur sait que c'est du JSON
       'Content-Length': Buffer.byteLength(body),  // Taille exacte en octets
@@ -153,7 +153,7 @@ const server = http.createServer((req, res) => {
   }
   else if (req.url === '/css') {
     // --- Reponse CSS ---
-    const css = 'body { background: #f0f0f0; font-family: sans-serif; }';
+    const css: string = 'body { background: #f0f0f0; font-family: sans-serif; }';
     res.writeHead(200, {
       'Content-Type': 'text/css; charset=utf-8',
     });
@@ -161,7 +161,7 @@ const server = http.createServer((req, res) => {
   }
   else if (req.url === '/svg') {
     // --- Reponse SVG ---
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">' +
+    const svg: string = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">' +
                 '<circle cx="50" cy="50" r="40" fill="blue"/></svg>';
     res.writeHead(200, {
       'Content-Type': 'image/svg+xml',
@@ -189,13 +189,13 @@ Content-Length: 4521
 - Permet au client de savoir quand il a tout recu
 - **Important pour le cache** : permet de verifier l'integrite du telechargement
 
-```javascript
+```typescript
 // Attention : Content-Length doit etre en OCTETS, pas en caracteres
-const body = 'Cafe avec des accents : eee';
+const body: string = 'Cafe avec des accents : eee';
 console.log(body.length);                    // 27 caracteres
 console.log(Buffer.byteLength(body, 'utf8')); // 27 octets (ici pareil)
 
-const bodyAccents = 'Cafe avec des accents : \u00e9\u00e8\u00ea';
+const bodyAccents: string = 'Cafe avec des accents : \u00e9\u00e8\u00ea';
 console.log(bodyAccents.length);                    // 28 caracteres
 console.log(Buffer.byteLength(bodyAccents, 'utf8')); // 31 octets (3 accents = 2 octets chacun)
 ```
@@ -233,14 +233,14 @@ Gain : 75% de bande passante !
 
 **Brotli (br) est generalement meilleur que gzip** pour le texte web (HTML, CSS, JS, JSON).
 
-```javascript
-// server-compression.js
+```typescript
+// server-compression.ts
 // Serveur avec compression gzip et Brotli
 
-const http = require('node:http');
-const zlib = require('node:zlib');    // Module de compression natif
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import zlib from 'node:zlib';    // Module de compression natif
 
-const LARGE_HTML = `
+const LARGE_HTML: string = `
 <!DOCTYPE html>
 <html>
 <head><title>Page avec beaucoup de contenu</title></head>
@@ -250,16 +250,16 @@ ${'<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>\n'.repeat(100
 </html>
 `;
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   // Lire le header Accept-Encoding du client
-  const acceptEncoding = req.headers['accept-encoding'] || '';
+  const acceptEncoding: string = (req.headers['accept-encoding'] as string) || '';
 
   console.log(`Accept-Encoding: ${acceptEncoding}`);
   console.log(`Taille originale: ${Buffer.byteLength(LARGE_HTML)} octets`);
 
   if (acceptEncoding.includes('br')) {
     // Le client accepte Brotli (meilleure compression)
-    const compressed = zlib.brotliCompressSync(Buffer.from(LARGE_HTML));
+    const compressed: Buffer = zlib.brotliCompressSync(Buffer.from(LARGE_HTML));
     console.log(`Taille Brotli: ${compressed.length} octets`);
 
     res.writeHead(200, {
@@ -273,7 +273,7 @@ const server = http.createServer((req, res) => {
   }
   else if (acceptEncoding.includes('gzip')) {
     // Le client accepte gzip
-    const compressed = zlib.gzipSync(Buffer.from(LARGE_HTML));
+    const compressed: Buffer = zlib.gzipSync(Buffer.from(LARGE_HTML));
     console.log(`Taille gzip: ${compressed.length} octets`);
 
     res.writeHead(200, {
@@ -387,36 +387,45 @@ Accept-Language: fr-FR, fr;q=0.9, en-US;q=0.8, en;q=0.7
                                                  Anglais generique (70%)
 ```
 
-```javascript
-// server-content-negotiation.js
+```typescript
+// server-content-negotiation.ts
 // Serveur avec negociation de contenu complete
 
-const http = require('node:http');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
-const articles = {
+interface ArticleTranslation {
+  [key: string]: string;
+}
+
+interface ArticlesByLang {
+  fr: ArticleTranslation;
+  en: ArticleTranslation;
+}
+
+const articles: Record<number, ArticlesByLang> = {
   42: {
     fr: { titre: 'Mon article en francais', contenu: 'Contenu francais...' },
     en: { title: 'My article in English', content: 'English content...' },
   }
 };
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   if (req.url !== '/article/42') {
     res.writeHead(404);
     return res.end('Not found');
   }
 
   // --- Negocier la langue ---
-  const acceptLang = req.headers['accept-language'] || 'en';
-  const lang = acceptLang.includes('fr') ? 'fr' : 'en';
-  const article = articles[42][lang];
+  const acceptLang: string = (req.headers['accept-language'] as string) || 'en';
+  const lang: 'fr' | 'en' = acceptLang.includes('fr') ? 'fr' : 'en';
+  const article: ArticleTranslation = articles[42][lang];
 
   // --- Negocier le format ---
-  const accept = req.headers['accept'] || 'text/html';
+  const accept: string = (req.headers['accept'] as string) || 'text/html';
 
   if (accept.includes('application/json')) {
     // Reponse JSON
-    const body = JSON.stringify(article);
+    const body: string = JSON.stringify(article);
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Content-Language': lang,
@@ -426,8 +435,8 @@ const server = http.createServer((req, res) => {
     res.end(body);
   } else {
     // Reponse HTML
-    const key = lang === 'fr' ? 'titre' : 'title';
-    const contentKey = lang === 'fr' ? 'contenu' : 'content';
+    const key: string = lang === 'fr' ? 'titre' : 'title';
+    const contentKey: string = lang === 'fr' ? 'contenu' : 'content';
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
       'Content-Language': lang,
@@ -521,16 +530,16 @@ AVEC max-age: 86400 :
   ...pendant 24h...
 ```
 
-```javascript
-// server-cors.js
+```typescript
+// server-cors.ts
 // Serveur avec CORS configure correctement
 
-const http = require('node:http');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
-const ALLOWED_ORIGINS = ['http://localhost:5173', 'https://mon-site.com'];
+const ALLOWED_ORIGINS: string[] = ['http://localhost:5173', 'https://mon-site.com'];
 
-const server = http.createServer((req, res) => {
-  const origin = req.headers['origin'];
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+  const origin: string | undefined = req.headers['origin'];
 
   // Verifier si l'origine est autorisee
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -601,13 +610,13 @@ Et le dernier ...
 
 ### 5.2 Chunked en pratique avec Node.js
 
-```javascript
-// server-chunked.js
+```typescript
+// server-chunked.ts
 // Serveur qui envoie une reponse en morceaux (streaming)
 
-const http = require('node:http');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
 
   if (req.url === '/stream') {
     // --- Reponse streamee ---
@@ -618,8 +627,8 @@ const server = http.createServer((req, res) => {
       'Cache-Control': 'no-store',       // On ne cache pas les streams
     });
 
-    let count = 0;
-    const interval = setInterval(() => {
+    let count: number = 0;
+    const interval: ReturnType<typeof setInterval> = setInterval(() => {
       count++;
       res.write(`Morceau ${count} envoye a ${new Date().toISOString()}\n`);
 
@@ -637,8 +646,8 @@ const server = http.createServer((req, res) => {
       'Connection': 'keep-alive',
     });
 
-    let eventId = 0;
-    const interval = setInterval(() => {
+    let eventId: number = 0;
+    const interval: ReturnType<typeof setInterval> = setInterval(() => {
       eventId++;
       // Format SSE : "data: <contenu>\n\n"
       res.write(`id: ${eventId}\ndata: {"time": "${new Date().toISOString()}", "count": ${eventId}}\n\n`);
@@ -800,28 +809,28 @@ une version gzip a un client qui ne comprend pas gzip.
 
 ### 6.5 Serveur complet avec Vary
 
-```javascript
-// server-vary.js
+```typescript
+// server-vary.ts
 // Demonstration de l'impact de Vary sur le cache
 
-const http = require('node:http');
-const zlib = require('node:zlib');
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import zlib from 'node:zlib';
 
-const CONTENT = {
+const CONTENT: Record<string, string> = {
   fr: '<html><body><h1>Bonjour le monde !</h1></body></html>',
   en: '<html><body><h1>Hello World!</h1></body></html>',
 };
 
-const server = http.createServer((req, res) => {
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
   // --- Determiner la langue ---
-  const acceptLang = req.headers['accept-language'] || 'en';
-  const lang = acceptLang.includes('fr') ? 'fr' : 'en';
-  const html = CONTENT[lang];
+  const acceptLang: string = (req.headers['accept-language'] as string) || 'en';
+  const lang: string = acceptLang.includes('fr') ? 'fr' : 'en';
+  const html: string = CONTENT[lang];
 
   // --- Determiner la compression ---
-  const acceptEnc = req.headers['accept-encoding'] || '';
-  let body;
-  let encoding = null;
+  const acceptEnc: string = (req.headers['accept-encoding'] as string) || '';
+  let body: Buffer;
+  let encoding: string | null = null;
 
   if (acceptEnc.includes('br')) {
     body = zlib.brotliCompressSync(Buffer.from(html));
@@ -834,7 +843,7 @@ const server = http.createServer((req, res) => {
   }
 
   // --- Construire les headers de reponse ---
-  const headers = {
+  const headers: Record<string, string | number> = {
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Language': lang,
     'Content-Length': body.length,
