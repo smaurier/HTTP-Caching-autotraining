@@ -1,6 +1,6 @@
 # Module 09 — Cache multi-couches
 
-> **Objectif** : Comprendre comment les differentes couches de cache (navigateur, CDN, reverse proxy, application, base de donnees) interagissent, et maitriser les strategies de coherence, d'invalidation en cascade et de cache applicatif.
+> **Objectif** : Comprendre comment les différentes couches de cache (navigateur, CDN, reverse proxy, application, base de donnees) interagissent, et maîtriser les stratégies de coherence, d'invalidation en cascade et de cache applicatif.
 > **Difficulte** : :star::star::star::star:
 
 ---
@@ -9,7 +9,7 @@
 
 ### 1.1 Vue d'ensemble
 
-Une requete traverse potentiellement **5 couches de cache** avant d'atteindre la source de verite :
+Une requête traverse potentiellement **5 couches de cache** avant d'atteindre la source de verite :
 
 ```
 +-------------+     +---------+     +---------------+     +----------+     +------+
@@ -21,9 +21,9 @@ Une requete traverse potentiellement **5 couches de cache** avant d'atteindre la
     (client)         (reseau)          (infra)            (code)        de verite
 ```
 
-### 1.2 L'analogie du systeme postal
+### 1.2 L'analogie du système postal
 
-- **Browser Cache** = ta boite aux lettres personnelle (rapide, petite capacite)
+- **Browser Cache** = ta boite aux lettres personnelle (rapide, petite capacité)
 - **CDN** = le bureau de poste de ton quartier (moyen, partage entre voisins)
 - **Reverse Proxy** = le centre de tri regional (gros volume, proche du destinataire final)
 - **App Cache (Redis)** = le classeur du bureau d'Alice (donnees structurees, acces rapide)
@@ -37,7 +37,7 @@ Une requete traverse potentiellement **5 couches de cache** avant d'atteindre la
 | CDN | Reponses HTTP | 5min - 24h | Headers + config CDN | Purge API |
 | Reverse Proxy | Reponses HTTP | 1min - 1h | VCL / config | Ban, purge |
 | App (Redis) | Donnees structurees | 30s - 1h | Code applicatif | DEL, EXPIRE |
-| DB (query cache) | Resultats de requetes | Auto | Moteur DB | Auto-invalidation |
+| DB (query cache) | Resultats de requêtes | Auto | Moteur DB | Auto-invalidation |
 
 ### 1.4 Exemple concret : page produit e-commerce
 
@@ -66,9 +66,9 @@ CDN (edge)    HIT         2ms      Rapide !
 
 ## 2. Cache coherence et donnees stale
 
-### 2.1 Le probleme fondamental
+### 2.1 Le problème fondamental
 
-Avec 5 couches de cache, la meme donnee existe potentiellement a 5 endroits differents. Quand la source de verite change, comment s'assurer que toutes les couches se mettent a jour ?
+Avec 5 couches de cache, la même donnee existe potentiellement a 5 endroits différents. Quand la source de verite change, comment s'assurer que toutes les couches se mettent a jour ?
 
 ```
 Etat initial : prix du produit 42 = 29.99 EUR
@@ -88,7 +88,7 @@ Etat initial : prix du produit 42 = 29.99 EUR
   DB :            24.99 EUR    <-- A JOUR (source de verite)
 ```
 
-### 2.2 Les 3 modeles de coherence
+### 2.2 Les 3 modèles de coherence
 
 ```
 +------------------+-----------------------------------------------+
@@ -107,13 +107,13 @@ Etat initial : prix du produit 42 = 29.99 EUR
 
 ### 2.3 Quand choisir quoi
 
-| Scenario | Modele | Justification |
+| Scenario | Modèle | Justification |
 |----------|--------|---------------|
 | Prix affiche | Eventuelle (court TTL) | Quelques secondes de retard OK |
-| Stock disponible | Eventuelle (tres court) | "Plus que 2 !" doit etre a jour |
+| Stock disponible | Eventuelle (très court) | "Plus que 2 !" doit etre a jour |
 | Solde bancaire | Forte | Toujours exact |
 | Avatar utilisateur | Eventuelle (long TTL) | Pas grave si ancien 5 min |
-| Token d'authentification | Forte | Securite |
+| Token d'authentification | Forte | Sécurité |
 | Article de blog | Eventuelle | Changements rares |
 
 ---
@@ -144,7 +144,7 @@ Invalidation en cascade (Inside-Out) :
                              ou que l'utilisateur recharge
 ```
 
-### 3.2 Le probleme du browser cache
+### 3.2 Le problème du browser cache
 
 On ne peut PAS invalider le cache navigateur de l'exterieur. Solutions :
 
@@ -406,7 +406,7 @@ server.listen(3000, () => {
 
 ### 4.1 Pourquoi des tags ?
 
-Une page web est rarement composee d'une seule "entite". La page `/produit/42` peut dependre de :
+Une page web est rarement composee d'une seule "entite". La page `/produit/42` peut dépendre de :
 
 ```
 /produit/42 depend de :
@@ -424,7 +424,7 @@ Tags : product-42 author-bob category-peripheriques
        reviews-42 promo-summer layout-v3
 ```
 
-### 4.2 Matrice de dependances
+### 4.2 Matrice de dépendances
 
 ```
                    product-42  category-tech  author-alice  promo-noel
@@ -620,7 +620,7 @@ class LRUCache {
 }
 ```
 
-**Avantages** : ultra-rapide (~ns), pas de dependance.
+**Avantages** : ultra-rapide (~ns), pas de dépendance.
 **Inconvenients** : pas partage entre processus, perdu au redemarrage.
 
 ### 5.2 Redis cache (distribue)
@@ -698,7 +698,7 @@ async function queryDatabase(id) {
 ```
 
 **Avantages** : partage entre processus/serveurs, persistant, rapide (~1ms).
-**Inconvenients** : dependance externe, latence reseau.
+**Inconvenients** : dépendance externe, latence réseau.
 
 ### 5.3 Write-Through vs Write-Behind (Write-Back)
 
@@ -861,17 +861,17 @@ server.listen(3000, () => {
 
 ### 5.5 Comparaison des patterns de cache applicatif
 
-| Pattern | Coherence | Perf lecture | Perf ecriture | Complexite |
+| Pattern | Coherence | Perf lecture | Perf écriture | Complexite |
 |---------|-----------|-------------|---------------|------------|
-| Cache-Aside | Eventuelle | Rapide (apres 1er miss) | Normale | Faible |
+| Cache-Aside | Eventuelle | Rapide (après 1er miss) | Normale | Faible |
 | Read-Through | Eventuelle | Rapide | Normale | Moyenne |
 | Write-Through | Forte | Rapide | Plus lente | Moyenne |
-| Write-Behind | Eventuelle | Rapide | Tres rapide | Elevee |
+| Write-Behind | Eventuelle | Rapide | Très rapide | Elevee |
 | Refresh-Ahead | Proactive | Rapide | Normale | Elevee |
 
 ---
 
-## 6. Strategies de TTL multi-couches
+## 6. Stratégies de TTL multi-couches
 
 ### 6.1 La regle du "TTL decroissant"
 
@@ -927,22 +927,22 @@ Assets statiques (avec hash) :
 
 ---
 
-## Points cles
+## Points clés
 
-1. Une requete peut traverser **5 couches de cache** : Browser, CDN, Reverse Proxy, App Cache, DB.
+1. Une requête peut traverser **5 couches de cache** : Browser, CDN, Reverse Proxy, App Cache, DB.
 2. La **coherence eventuelle** est acceptable pour la plupart des cas ; la coherence forte est reservee aux donnees critiques (finance, auth).
 3. L'**invalidation en cascade** doit se faire de l'interieur vers l'exterieur : DB -> App Cache -> Proxy -> CDN -> (Browser : impossible).
-4. Les **Surrogate Keys** (cache tags) permettent d'invalider toutes les URLs liees a une entite en une seule operation.
-5. **Write-Through** garantit la coherence cache/DB mais double la latence d'ecriture.
+4. Les **Surrogate Keys** (cache tags) permettent d'invalider toutes les URLs liees à une entite en une seule operation.
+5. **Write-Through** garantit la coherence cache/DB mais double la latence d'écriture.
 6. **Write-Behind** offre des ecritures ultra-rapides mais risque la perte de donnees.
 7. Le **TTL doit decroitre** en s'eloignant de la source : Redis (long) > CDN (moyen) > Browser (court).
-8. Le cache navigateur est **impossible a invalider de l'exterieur** -- c'est pour ca qu'il doit avoir le TTL le plus court ou utiliser `no-cache`.
+8. Le cache navigateur est **impossible a invalider de l'exterieur** -- c'est pour ça qu'il doit avoir le TTL le plus court ou utiliser `no-cache`.
 
 ---
 
 ## Lab associe
 
-> Lab 09 — Construire un systeme de cache a 3 couches (in-memory, reverse proxy, CDN simule) avec invalidation en cascade et purge par tag
+> Lab 09 — Construire un système de cache a 3 couches (in-memory, reverse proxy, CDN simule) avec invalidation en cascade et purge par tag
 
 ---
 
@@ -952,7 +952,7 @@ Assets statiques (avec hash) :
 - [Redis Caching Patterns](https://redis.io/docs/manual/patterns/)
 - [Fastly - Surrogate Keys Cookbook](https://docs.fastly.com/en/guides/purging-api-cache-with-surrogate-keys)
 - [Facebook - TAO: Distributed Data Store for the Social Graph](https://www.usenix.org/conference/atc13/technical-sessions/presentation/bronson)
-- [Martin Fowler - Cache Strategies](https://martinfowler.com/bliki/TwoHardThings.html)
+- [Martin Fowler - Cache Stratégies](https://martinfowler.com/bliki/TwoHardThings.html)
 
 ---
 
@@ -964,7 +964,7 @@ Imagine un supermarche :
 - **Redis**, c'est l'entrepot du supermarche (stock en gros, rapide a acceder)
 - **Le reverse proxy**, c'est le rayon du magasin (visible, pre-arrange)
 - **Le CDN**, c'est le supermarche le plus pres de chez toi (geographiquement proche)
-- **Le browser cache**, c'est ton frigo a la maison (le plus rapide mais tu ne peux pas le vider a distance)
+- **Le browser cache**, c'est ton frigo à la maison (le plus rapide mais tu ne peux pas le vider a distance)
 
 Quand un produit est rappele (invalidation), il faut :
 1. Prevenir le producteur (DB : mise a jour)
@@ -986,10 +986,10 @@ Tu geres un site e-commerce avec :
 - Cloudflare comme CDN (TTL 10 min)
 - Browser cache avec `max-age=60`
 
-Le produit 42 passe en promotion (-50%). Decris **etape par etape** ce qui se passe pour :
+Le produit 42 passe en promotion (-50%). Decris **étape par étape** ce qui se passe pour :
 
 1. La mise a jour initiale
-2. Un utilisateur qui avait deja la page en cache navigateur
+2. Un utilisateur qui avait déjà la page en cache navigateur
 3. Un utilisateur dans un POP CDN qui n'a pas encore recu la purge
 4. Quel est le temps maximum avant que TOUS les utilisateurs voient le nouveau prix ?
 
@@ -1023,3 +1023,14 @@ Le produit 42 passe en promotion (-50%). Decris **etape par etape** ce qui se pa
 
    C'est pour ca que le browser doit avoir le TTL le plus court !
 ```
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 09 cache multi couches](../screencasts/screencast-09-cache-multi-couches.md)
+2. **Lab** : [lab-08-reverse-proxy-cache](../labs/lab-08-reverse-proxy-cache/README)
+3. **Visualisation** : [Multi-Layer Cache](../visualizations/multi-layer-cache.html)
+4. **Quiz** : [quiz 09 multi layer](../quizzes/quiz-09-multi-layer.html)
+:::

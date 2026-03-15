@@ -20,7 +20,7 @@
 
 **Action** : Afficher le slide "Module 10 — Server-Side Rendering".
 
-> Le SSR, c'est quand le serveur génère le HTML complet de la page avant de l'envoyer au navigateur. Contrairement au CSR (Client-Side Rendering) où le navigateur reçoit un squelette HTML vide et construit la page en JavaScript. L'avantage du SSR : un premier affichage plus rapide et un meilleur SEO. L'inconvénient : plus de travail pour le serveur. Et c'est là que le cache entre en jeu.
+> Le SSR, c'est quand le serveur génère le HTML complet de la page avant de l'envoyer au navigateur. Contrairement au CSR (Client-Side Rendering) ou le navigateur reçoit un squelette HTML vide et construit la page en JavaScript. L'avantage du SSR : un premier affichage plus rapide et un meilleur SEO. L'inconvénient : plus de travail pour le serveur. Et c'est là que le cache entre en jeu.
 
 ### [01:30-04:30] CSR vs SSR — La différence en pratique
 

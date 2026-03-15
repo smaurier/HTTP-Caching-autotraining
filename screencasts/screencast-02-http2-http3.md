@@ -66,7 +66,7 @@ node server-h2.js
 curl --http2 -v https://localhost:3001/
 ```
 
-> Deuxièmement, le Server Push. Le serveur peut envoyer des ressources au client avant même que le client ne les demande. Par exemple, quand le client demande index.html, le serveur sait qu'il aura besoin de style.css et le pousse directement. En pratique, le Server Push est peu utilisé et même en cours de dépréciation dans certains navigateurs. Les techniques de prefetch et preload sont souvent préférées.
+> Deuxièmement, le Server Push. Le serveur peut envoyer des ressources au client avant même que le client ne les demandé. Par exemple, quand le client demandé index.html, le serveur sait qu'il aura besoin de style.css et le pousse directement. En pratique, le Server Push est peu utilisé et même en cours de dépréciation dans certains navigateurs. Les techniques de prefetch et preload sont souvent préférées.
 
 > Troisièmement, la priorisation des flux. Le navigateur peut indiquer au serveur quelles ressources sont les plus importantes. Le CSS critique avant les images de fond, par exemple.
 
@@ -101,7 +101,7 @@ curl --http3 -I https://www.google.com/ 2>&1 | head -20
 
 **Action** : Afficher un tableau récapitulatif.
 
-> La réponse courte : presque rien au niveau des en-têtes. Cache-Control fonctionne pareil, les ETags fonctionnent pareil, les requêtes conditionnelles fonctionnent pareil. Ce qui change, c'est la performance du réseau sous-jacent, et ça a un impact indirect sur vos stratégies de cache.
+> La réponse courte : presque rien au niveau des en-têtes. Cache-Control fonctionne pareil, les ETags fonctionnent pareil, les requêtes conditionnelles fonctionnent pareil. Ce qui change, c'est la performance du réseau sous-jacent, et ça à un impact indirect sur vos stratégies de cache.
 
 > Par exemple, en HTTP/1.1, on avait l'habitude de concaténer tous les fichiers CSS en un seul gros fichier pour minimiser le nombre de requêtes. Avec HTTP/2, c'est moins nécessaire grâce au multiplexing. On peut servir plein de petits fichiers sans pénalité. Et ça change la granularité du cache : si un seul composant CSS change, on n'invalide que ce fichier au lieu de tout le bundle.
 

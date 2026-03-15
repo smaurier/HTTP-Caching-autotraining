@@ -59,7 +59,7 @@ node exercise.js
 
 > Voilà les résultats. Un score de performance global sur 100. Et le détail des métriques : FCP, LCP, TBT (Total Blocking Time, lié à l'INP), CLS, et Speed Index.
 
-> En dessous, Lighthouse nous donne des recommandations. "Serve images in next-gen formats", "Eliminate render-blocking resources", "Enable text compression"... Chaque recommandation a un impact estimé.
+> En dessous, Lighthouse nous donne des recommandations. "Serve images in next-gen formats", "Eliminate render-blocking resources", "Enable text compression"... Chaque recommandation à un impact estimé.
 
 **Action** : Cliquer sur les recommandations une par une.
 
@@ -148,7 +148,7 @@ curl "https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=https://exa
 
 > Un : Assets statiques avec hash et max-age d'un an + immutable. Deux : HTML avec no-cache ou max-age court pour garantir les mises à jour. Trois : compression gzip/brotli activée avec Vary: Accept-Encoding. Quatre : images optimisées (format WebP/AVIF) avec cache long. Cinq : CDN devant votre serveur pour réduire la latence. Six : Service Worker pour le cache offline et la performance au retour.
 
-> Sept : preload des ressources critiques. Le `<link rel="preload">` indique au navigateur de télécharger une ressource en priorité, avant même que le CSS ou le JS la demande.
+> Sept : preload des ressources critiques. Le `<link rel="preload">` indique au navigateur de télécharger une ressource en priorité, avant même que le CSS ou le JS la demandé.
 
 ```html
 <!-- Preload de la police critique -->
@@ -165,7 +165,7 @@ curl "https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=https://exa
 
 **Action** : Mentionner le quiz et le lab.
 
-> Le lab `labs/lab-14-lighthouse-audit/` vous fait auditer une application, identifier les problèmes, appliquer les optimisations de cache, et mesurer l'amélioration. C'est un exercice très concret et satisfaisant. Prochain et dernier screencast : le projet final, où on met tout ensemble. A tout de suite !
+> Le lab `labs/lab-14-lighthouse-audit/` vous fait auditer une application, identifier les problèmes, appliquer les optimisations de cache, et mesurer l'amélioration. C'est un exercice très concret et satisfaisant. Prochain et dernier screencast : le projet final, ou on met tout ensemble. A tout de suite !
 
 ## Points d'attention pour l'enregistrement
 - Lancer Lighthouse en mode incognito pour éviter les extensions qui faussent les résultats

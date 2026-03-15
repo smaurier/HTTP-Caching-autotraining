@@ -1,15 +1,15 @@
 # Module 01 — Le protocole HTTP en profondeur
 
-> **Objectif** : Maitriser l'anatomie des requetes et reponses HTTP, connaitre les methodes et status codes, et comprendre les connexions HTTP/1.1.
-> **Difficulte** : ⭐ (Debutant)
+> **Objectif** : Maîtriser l'anatomie des requêtes et réponses HTTP, connaître les méthodes et status codes, et comprendre les connexions HTTP/1.1.
+> **Difficulte** : ⭐ (Débutant)
 
 ---
 
-## 1. Anatomie d'une requete HTTP
+## 1. Anatomie d'une requête HTTP
 
 ### 1.1 L'analogie du bon de commande
 
-Une requete HTTP, c'est comme un bon de commande dans un restaurant :
+Une requête HTTP, c'est comme un bon de commande dans un restaurant :
 
 ```
 +-----------------------------------------------+
@@ -30,9 +30,9 @@ Une requete HTTP, c'est comme un bon de commande dans un restaurant :
 +-----------------------------------------------+
 ```
 
-### 1.2 Structure formelle d'une requete
+### 1.2 Structure formelle d'une requête
 
-Une requete HTTP se compose de trois parties :
+Une requête HTTP se compose de trois parties :
 
 ```
 POST /api/users HTTP/1.1                    <-- Ligne de requete
@@ -45,7 +45,7 @@ Content-Length: 52                           <-- /
 {"name": "Alice", "email": "a@test.com"}   <-- Body (optionnel)
 ```
 
-**Decomposition de la ligne de requete :**
+**Decomposition de la ligne de requête :**
 
 ```
 POST          /api/users       HTTP/1.1
@@ -57,7 +57,7 @@ Methode       Chemin (URI)     Version du protocole
 - Version   : Quelle version de HTTP ?
 ```
 
-### 1.3 Voir une requete avec Node.js
+### 1.3 Voir une requête avec Node.js
 
 ```typescript
 // inspect-request.ts
@@ -124,11 +124,11 @@ curl -X PUT \
 
 ---
 
-## 2. Anatomie d'une reponse HTTP
+## 2. Anatomie d'une réponse HTTP
 
 ### 2.1 L'analogie du colis de retour
 
-La reponse HTTP, c'est comme le colis que tu recois apres ta commande :
+La réponse HTTP, c'est comme le colis que tu recois après ta commande :
 
 ```
 +-----------------------------------------------+
@@ -152,7 +152,7 @@ La reponse HTTP, c'est comme le colis que tu recois apres ta commande :
 +-----------------------------------------------+
 ```
 
-### 2.2 Structure formelle d'une reponse
+### 2.2 Structure formelle d'une réponse
 
 ```
 HTTP/1.1 200 OK                             <-- Ligne de statut
@@ -179,7 +179,7 @@ Version       Code       Phrase descriptive
               numerique  (pour les humains)
 ```
 
-### 2.3 Construire une reponse avec Node.js
+### 2.3 Construire une réponse avec Node.js
 
 ```typescript
 // response-builder.ts
@@ -234,30 +234,30 @@ server.listen(3000, () => console.log('http://localhost:3000'));
 
 ---
 
-## 3. Les methodes HTTP
+## 3. Les méthodes HTTP
 
 ### 3.1 Vue d'ensemble
 
-Les methodes HTTP definissent **l'action** a effectuer sur la ressource. C'est comme les differents types de demandes que tu peux faire au guichet de la poste.
+Les méthodes HTTP definissent **l'action** a effectuer sur la ressource. C'est comme les différents types de demandes que tu peux faire au guichet de la poste.
 
-| Methode     | Action                   | Analogie postale                     | Body requete | Body reponse | Idempotent | Safe |
+| Méthode     | Action                   | Analogie postale                     | Body requête | Body réponse | Idempotent | Safe |
 |-------------|--------------------------|--------------------------------------|:------------:|:------------:|:----------:|:----:|
 | **GET**     | Lire une ressource       | Demander un document                 | Non          | Oui          | Oui        | Oui  |
-| **POST**    | Creer une ressource      | Envoyer un nouveau colis             | Oui          | Oui          | Non        | Non  |
+| **POST**    | Créer une ressource      | Envoyer un nouveau colis             | Oui          | Oui          | Non        | Non  |
 | **PUT**     | Remplacer une ressource  | Remplacer le contenu d'une boite     | Oui          | Optionnel    | Oui        | Non  |
 | **PATCH**   | Modifier partiellement   | Corriger une adresse sur un colis    | Oui          | Oui          | Non        | Non  |
 | **DELETE**  | Supprimer une ressource  | Demander la destruction d'un courrier| Optionnel    | Optionnel    | Oui        | Non  |
 | **HEAD**    | Lire les headers seuls   | Demander le poids du colis sans l'ouvrir | Non      | Non          | Oui        | Oui  |
-| **OPTIONS** | Connaitre les possibilites| Demander la liste des services dispo | Non          | Oui          | Oui        | Oui  |
+| **OPTIONS** | Connaître les possibilites| Demander la liste des services dispo | Non          | Oui          | Oui        | Oui  |
 
-**Deux proprietes importantes :**
+**Deux propriétés importantes :**
 
-- **Idempotent** : Faire la meme requete 1 fois ou 10 fois produit le meme resultat. `DELETE /user/42` supprime l'utilisateur 42. L'appeler 10 fois ne supprime toujours que l'utilisateur 42.
-- **Safe (sure)** : La requete ne modifie rien sur le serveur. `GET` ne fait que lire.
+- **Idempotent** : Faire la même requête 1 fois ou 10 fois produit le même résultat. `DELETE /user/42` supprime l'utilisateur 42. L'appeler 10 fois ne supprime toujours que l'utilisateur 42.
+- **Safe (sure)** : La requête ne modifie rien sur le serveur. `GET` ne fait que lire.
 
-**Pourquoi c'est important pour le cache ?** Seules les methodes **safe** (GET, HEAD) sont generalement cachees. On ne met jamais en cache un POST car il cree quelque chose de nouveau a chaque appel.
+**Pourquoi c'est important pour le cache ?** Seules les méthodes **safe** (GET, HEAD) sont généralement cachees. On ne met jamais en cache un POST car il créé quelque chose de nouveau à chaque appel.
 
-### 3.2 GET — La methode la plus courante
+### 3.2 GET — La méthode la plus courante
 
 ```
 GET /api/articles/42 HTTP/1.1
@@ -266,9 +266,9 @@ Accept: application/json
 ```
 
 - Recupere une ressource sans la modifier
-- Pas de body dans la requete
-- C'est la methode par defaut du navigateur quand tu tapes une URL
-- **C'est la principale methode concernee par le cache HTTP**
+- Pas de body dans la requête
+- C'est la méthode par defaut du navigateur quand tu tapes une URL
+- **C'est la principale méthode concernee par le cache HTTP**
 
 ```typescript
 // Cote serveur Node.js
@@ -283,7 +283,7 @@ if (req.method === 'GET' && req.url === '/api/articles/42') {
 }
 ```
 
-### 3.3 POST — Creer quelque chose
+### 3.3 POST — Créer quelque chose
 
 ```
 POST /api/articles HTTP/1.1
@@ -295,8 +295,8 @@ Content-Length: 45
 ```
 
 - Cree une nouvelle ressource
-- Le body contient les donnees a creer
-- **Non idempotent** : deux POST identiques creent deux articles differents
+- Le body contient les donnees a créer
+- **Non idempotent** : deux POST identiques creent deux articles différents
 - **Jamais mis en cache** par defaut
 
 ### 3.4 PUT vs PATCH
@@ -330,7 +330,7 @@ curl -I https://example.com/gros-fichier.zip
 # etag: "abc123"
 ```
 
-**Pourquoi HEAD est utile ?** Avant de telecharger un fichier de 500 Mo, tu peux verifier avec HEAD si ta copie en cache est encore valide. Si le ETag n'a pas change, inutile de re-telecharger.
+**Pourquoi HEAD est utile ?** Avant de telecharger un fichier de 500 Mo, tu peux vérifier avec HEAD si ta copie en cache est encore valide. Si le ETag n'a pas change, inutile de re-telecharger.
 
 ### 3.6 OPTIONS — Utilise pour CORS
 
@@ -348,7 +348,7 @@ Access-Control-Allow-Methods: GET, POST, PUT, DELETE
 Access-Control-Max-Age: 86400      <-- Cacher cette reponse 24h
 ```
 
-**Pourquoi ?** Avant d'envoyer une requete cross-origin "complexe", le navigateur envoie automatiquement un OPTIONS (appele "preflight") pour verifier les permissions. Le header `Access-Control-Max-Age` permet de **cacher** cette reponse pour eviter de refaire le preflight.
+**Pourquoi ?** Avant d'envoyer une requête cross-origin "complexe", le navigateur envoie automatiquement un OPTIONS (appele "preflight") pour vérifier les permissions. Le header `Access-Control-Max-Age` permet de **cacher** cette réponse pour éviter de refaire le preflight.
 
 ---
 
@@ -392,8 +392,8 @@ Content-Type: text/html
 
 | Code | Nom                  | Usage                                        |
 |------|----------------------|----------------------------------------------|
-| 200  | OK                   | Requete reussie, voici la reponse            |
-| 201  | Created              | Ressource creee avec succes (POST)           |
+| 200  | OK                   | Requête reussie, voici la réponse            |
+| 201  | Created              | Ressource créée avec succes (POST)           |
 | 204  | No Content           | Reussi, mais pas de body a renvoyer          |
 
 ```typescript
@@ -422,9 +422,9 @@ if (req.method === 'DELETE') {
 }
 ```
 
-### 4.4 Les 3xx — Redirections (tres importants pour le cache)
+### 4.4 Les 3xx — Redirections (très importants pour le cache)
 
-| Code | Nom                  | Permanente ? | Methode conservee ? | Cachable ?       |
+| Code | Nom                  | Permanente ? | Méthode conservee ? | Cachable ?       |
 |------|----------------------|:------------:|:-------------------:|:----------------:|
 | 301  | Moved Permanently    | Oui          | Peut changer (-> GET)| Oui par defaut  |
 | 302  | Found                | Non          | Peut changer (-> GET)| Non par defaut  |
@@ -454,7 +454,7 @@ CLIENT                                    SERVEUR
   |  Le navigateur utilise sa copie locale   |
 ```
 
-**Pourquoi 304 est genial ?** La reponse fait typiquement **~200 octets** au lieu de potentiellement **des megaoctets**. On economise de la bande passante ET du temps.
+**Pourquoi 304 est genial ?** La réponse fait typiquement **~200 octets** au lieu de potentiellement **des megaoctets**. On economise de la bande passante ET du temps.
 
 ```typescript
 // Serveur qui repond 304 quand rien n'a change
@@ -495,26 +495,26 @@ server.listen(3000);
 
 | Code | Nom                  | Signification                                |
 |------|----------------------|----------------------------------------------|
-| 400  | Bad Request          | Requete mal formee                           |
+| 400  | Bad Request          | Requête mal formee                           |
 | 401  | Unauthorized         | Authentification requise                     |
 | 403  | Forbidden            | Authentifie mais pas autorise                |
 | 404  | Not Found            | Ressource introuvable                        |
-| 405  | Method Not Allowed   | Methode HTTP non permise                     |
-| 409  | Conflict             | Conflit avec l'etat actuel                   |
+| 405  | Method Not Allowed   | Méthode HTTP non permise                     |
+| 409  | Conflict             | Conflit avec l'état actuel                   |
 | 429  | Too Many Requests    | Rate limiting                                |
 
 **Pourquoi ?** La distinction entre 401 et 403 est importante : 401 signifie "qui es-tu ?", 403 signifie "je sais qui tu es, mais tu n'as pas le droit".
 
-**Les erreurs 4xx et le cache :** Les reponses 404 peuvent etre cachees ! Si un fichier n'existe pas, le cache peut retenir cette information pour eviter de redemander.
+**Les erreurs 4xx et le cache :** Les réponses 404 peuvent etre cachees ! Si un fichier n'existe pas, le cache peut retenir cette information pour éviter de redemander.
 
 ### 4.6 Les 5xx — Erreurs serveur
 
 | Code | Nom                   | Signification                               |
 |------|-----------------------|---------------------------------------------|
 | 500  | Internal Server Error | Erreur non prevue sur le serveur            |
-| 502  | Bad Gateway           | Le proxy a recu une reponse invalide        |
+| 502  | Bad Gateway           | Le proxy a recu une réponse invalide        |
 | 503  | Service Unavailable   | Serveur temporairement indisponible         |
-| 504  | Gateway Timeout       | Le proxy n'a pas recu de reponse a temps    |
+| 504  | Gateway Timeout       | Le proxy n'a pas recu de réponse a temps    |
 
 **Et le cache ?** En cas de 5xx, un cache intelligent peut servir une copie **stale** (perimee) plutot qu'afficher l'erreur. C'est la directive `stale-while-error` de Cache-Control (on le verra au Module 04).
 
@@ -522,9 +522,9 @@ server.listen(3000);
 
 ## 5. Les connexions HTTP/1.1
 
-### 5.1 Le probleme des connexions courtes (HTTP/1.0)
+### 5.1 Le problème des connexions courtes (HTTP/1.0)
 
-En HTTP/1.0, chaque requete ouvrait une nouvelle connexion TCP :
+En HTTP/1.0, chaque requête ouvrait une nouvelle connexion TCP :
 
 ```
 HTTP/1.0 — UNE CONNEXION PAR REQUETE
@@ -546,7 +546,7 @@ Chaque handshake TCP prend ~1 RTT (aller-retour).
 4 requetes = 4 handshakes = 4 RTT gaspilles !
 ```
 
-**Analogie** : C'est comme raccrocher le telephone apres chaque phrase et devoir rappeler pour dire la phrase suivante.
+**Analogie** : C'est comme raccrocher le telephone après chaque phrase et devoir rappeler pour dire la phrase suivante.
 
 ### 5.2 Keep-Alive (HTTP/1.1)
 
@@ -573,7 +573,7 @@ Connection: close
 
 ### 5.3 Pipelining HTTP/1.1
 
-Le pipelining permet d'envoyer plusieurs requetes **sans attendre** les reponses :
+Le pipelining permet d'envoyer plusieurs requêtes **sans attendre** les réponses :
 
 ```
 SANS PIPELINING (sequentiel)          AVEC PIPELINING
@@ -591,7 +591,7 @@ Client    Serveur                     Client    Serveur
 Temps: 6 etapes                       Temps: 4 etapes (mais...)
 ```
 
-**Le probleme du Head-of-Line (HoL) blocking :**
+**Le problème du Head-of-Line (HoL) blocking :**
 
 ```
 PIPELINING AVEC HOL BLOCKING
@@ -611,7 +611,7 @@ C'est comme une file d'attente au supermarche : si le premier
 client met 10 minutes, tout le monde attend.
 ```
 
-**Pourquoi c'est un probleme ?** En pratique, le pipelining HTTP/1.1 est desactive dans la plupart des navigateurs a cause du HoL blocking. La solution viendra avec HTTP/2 (Module 02).
+**Pourquoi c'est un problème ?** En pratique, le pipelining HTTP/1.1 est désactivé dans la plupart des navigateurs a cause du HoL blocking. La solution viendra avec HTTP/2 (Module 02).
 
 ### 5.4 La limite des 6 connexions
 
@@ -631,7 +631,7 @@ NAVIGATEUR                              SERVEUR (example.com)
   Requete 8   : [EN ATTENTE........]   <-- Bloquee !
 ```
 
-**Pourquoi cette limite ?** Pour ne pas surcharger le serveur. Mais ca cree un goulot d'etranglement : une page avec 50 ressources doit les telecharger par lots de 6.
+**Pourquoi cette limite ?** Pour ne pas surcharger le serveur. Mais ça créé un goulot d'etranglement : une page avec 50 ressources doit les telecharger par lots de 6.
 
 **L'astuce historique du "domain sharding" :**
 
@@ -646,7 +646,7 @@ NAVIGATEUR                              SERVEUR (example.com)
 
 **Note** : Cette astuce est obsolete avec HTTP/2. Ne l'utilisez plus.
 
-### 5.5 Resume des limitations HTTP/1.1
+### 5.5 Résumé des limitations HTTP/1.1
 
 ```
 +--------------------------------------------------+
@@ -795,27 +795,27 @@ server.listen(3000, () => {
 
 ---
 
-## Points cles
+## Points clés
 
-1. **Une requete HTTP** a trois parties : ligne de requete (methode + URL + version), headers, et body optionnel.
-2. **Une reponse HTTP** a trois parties : ligne de statut (version + code + phrase), headers, et body.
-3. **Les methodes** definissent l'action : GET (lire), POST (creer), PUT (remplacer), PATCH (modifier), DELETE (supprimer).
-4. **Les status codes** communiquent le resultat : 2xx (succes), 3xx (redirection), 4xx (erreur client), 5xx (erreur serveur).
-5. **304 Not Modified** est le status code cle du caching : il permet au serveur de dire "ta copie est encore bonne" sans renvoyer le contenu.
+1. **Une requête HTTP** a trois parties : ligne de requête (méthode + URL + version), headers, et body optionnel.
+2. **Une réponse HTTP** a trois parties : ligne de statut (version + code + phrase), headers, et body.
+3. **Les méthodes** definissent l'action : GET (lire), POST (créer), PUT (remplacer), PATCH (modifier), DELETE (supprimer).
+4. **Les status codes** communiquent le résultat : 2xx (succes), 3xx (redirection), 4xx (erreur client), 5xx (erreur serveur).
+5. **304 Not Modified** est le status code clé du caching : il permet au serveur de dire "ta copie est encore bonne" sans renvoyer le contenu.
 6. **HTTP/1.1** utilise keep-alive par defaut mais souffre du Head-of-Line blocking et de la limite de 6 connexions par domaine.
 
 ---
 
 ## Lab associe
 
--> `labs/01-construire-une-api-http.md` — Creer une API REST complete avec Node.js et observer les headers
+-> `labs/01-construire-une-api-http.md` — Créer une API REST complete avec Node.js et observer les headers
 
 ---
 
 ## Pour aller plus loin
 
-- [MDN — Methodes HTTP](https://developer.mozilla.org/fr/docs/Web/HTTP/Methods)
-- [MDN — Codes de reponse HTTP](https://developer.mozilla.org/fr/docs/Web/HTTP/Status)
+- [MDN — Méthodes HTTP](https://developer.mozilla.org/fr/docs/Web/HTTP/Methods)
+- [MDN — Codes de réponse HTTP](https://developer.mozilla.org/fr/docs/Web/HTTP/Status)
 - [RFC 9110 — HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110)
 - [HTTP Status Dogs](https://httpstatusdogs.com/) — Pour retenir les codes avec humour
 
@@ -825,9 +825,9 @@ server.listen(3000, () => {
 
 **Retiens juste trois choses :**
 
-1. Le client envoie une **requete** avec une methode (GET = "donne-moi", POST = "cree ca") vers une URL.
-2. Le serveur renvoie une **reponse** avec un code (200 = "OK", 404 = "pas trouve", 304 = "rien n'a change").
-3. HTTP/1.1 reutilise les connexions (keep-alive) mais ne peut envoyer qu'une requete a la fois par connexion.
+1. Le client envoie une **requête** avec une méthode (GET = "donne-moi", POST = "créé ça") vers une URL.
+2. Le serveur renvoie une **réponse** avec un code (200 = "OK", 404 = "pas trouve", 304 = "rien n'a change").
+3. HTTP/1.1 reutilise les connexions (keep-alive) mais ne peut envoyer qu'une requête à la fois par connexion.
 
 Le reste, ce sont des details qu'on approfondira au fil des modules.
 
@@ -837,7 +837,7 @@ Le reste, ce sont des details qu'on approfondira au fil des modules.
 
 ### Objectif
 
-Inspecter les headers de requete et de reponse HTTP dans Chrome DevTools, identifier les status codes, et observer le comportement de keep-alive.
+Inspecter les headers de requête et de réponse HTTP dans Chrome DevTools, identifier les status codes, et observer le comportement de keep-alive.
 
 ### Etapes
 
@@ -851,25 +851,25 @@ Inspecter les headers de requete et de reponse HTTP dans Chrome DevTools, identi
 2. **Ouvrir DevTools et naviguer**
    - Ouvre Chrome et va sur `http://localhost:3000/html`
    - Ouvre DevTools (`F12`) > onglet **Network**
-   - Recharge la page (`F5`) pour capturer la requete
+   - Recharge la page (`F5`) pour capturer la requête
 
-3. **Inspecter les headers de requete**
-   - Clique sur la requete `html` dans la liste
+3. **Inspecter les headers de requête**
+   - Clique sur la requête `html` dans la liste
    - Dans le panneau **Headers**, repere la section **Request Headers** :
      - `Host: localhost:3000` — adresse du serveur
      - `Accept: text/html,...` — types de contenu acceptes par le navigateur
-     - `Connection: keep-alive` — le navigateur demande une connexion persistante
+     - `Connection: keep-alive` — le navigateur demandé une connexion persistante
      - `User-Agent: ...` — identification du navigateur
 
-4. **Inspecter les headers de reponse**
+4. **Inspecter les headers de réponse**
    - Toujours dans le panneau **Headers**, repere la section **Response Headers** :
-     - `Content-Type: text/html; charset=utf-8` — type de la reponse
+     - `Content-Type: text/html; charset=utf-8` — type de la réponse
      - `Cache-Control: max-age=60` — directive de cache
      - `Connection: keep-alive` — le serveur confirme la connexion persistante
    - Observe le **Status Code** affiche en haut : `200 OK`
 
-5. **Observer differents status codes**
-   - Dans la barre d'adresse, navigue vers les differentes routes et observe le status code dans DevTools :
+5. **Observer différents status codes**
+   - Dans la barre d'adresse, navigue vers les différentes routes et observe le status code dans DevTools :
      - `http://localhost:3000/html` --> `200 OK`
      - `http://localhost:3000/json` --> `200 OK` (observe le header `Cache-Control: no-store`)
      - `http://localhost:3000/redirect` --> `301 Moved Permanently` (observe le header `Location: /html`)
@@ -878,10 +878,10 @@ Inspecter les headers de requete et de reponse HTTP dans Chrome DevTools, identi
 
 6. **Observer le keep-alive**
    - Navigue vers `http://localhost:3000/html` puis immediatement vers `http://localhost:3000/json`
-   - Dans l'onglet Network, clique sur une requete et ouvre l'onglet **Timing**
+   - Dans l'onglet Network, clique sur une requête et ouvre l'onglet **Timing**
    - Observe le champ **Connection Start** :
-     - Pour la premiere requete : tu verras le temps de connexion TCP (quelques ms)
-     - Pour les requetes suivantes : le temps de connexion sera `0 ms` car la connexion TCP est **reutilisee** (keep-alive)
+     - Pour la première requête : tu verras le temps de connexion TCP (quelques ms)
+     - Pour les requêtes suivantes : le temps de connexion sera `0 ms` car la connexion TCP est **reutilisee** (keep-alive)
 
 7. **Utiliser le filtre par status code**
    - Dans le champ de filtre en haut de l'onglet Network, tape `status-code:301` pour ne voir que les redirections
@@ -902,9 +902,9 @@ Onglet Timing (2eme requete) :
 
 ### Questions de reflexion
 
-- Quelle est la difference entre les headers `Cache-Control: max-age=60` et `Cache-Control: no-store` que tu as observes ?
-- Pourquoi la requete vers `/redirect` est-elle suivie automatiquement d'une requete vers `/html` ?
-- Comment le keep-alive ameliore-t-il les performances quand tu navigues entre plusieurs pages du meme serveur ?
+- Quelle est la différence entre les headers `Cache-Control: max-age=60` et `Cache-Control: no-store` que tu as observes ?
+- Pourquoi la requête vers `/redirect` est-elle suivie automatiquement d'une requête vers `/html` ?
+- Comment le keep-alive ameliore-t-il les performances quand tu navigues entre plusieurs pages du même serveur ?
 
 ---
 
@@ -912,7 +912,7 @@ Onglet Timing (2eme requete) :
 
 ### Construis un serveur qui renvoie le bon status code
 
-**Objectif** : Creer un serveur Node.js qui repond avec le status code correct selon la situation.
+**Objectif** : Créer un serveur Node.js qui repond avec le status code correct selon la situation.
 
 **Cahier des charges :**
 
@@ -998,3 +998,14 @@ server.listen(3000, () => console.log('http://localhost:3000'));
 ```
 
 </details>
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 01 http protocol](../screencasts/screencast-01-http-protocol.md)
+2. **Lab** : [lab-01-http-inspector](../labs/lab-01-http-inspector/README)
+3. **Visualisation** : [HTTP Lifecycle](../visualizations/http-lifecycle.html)
+4. **Quiz** : [quiz 01 http protocol](../quizzes/quiz-01-http-protocol.html)
+:::

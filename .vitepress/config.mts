@@ -75,11 +75,11 @@ export default defineConfig({
           text: 'Visualisations',
           items: [
             { text: 'Toutes les visualisations', link: '/visualizations/' },
-            { text: 'HTTP Lifecycle', link: '/visualizations/http-lifecycle' },
-            { text: 'Cache Decision Tree', link: '/visualizations/cache-decision-tree' },
-            { text: 'Multi-Layer Cache', link: '/visualizations/multi-layer-cache' },
-            { text: 'SSR & Hydration', link: '/visualizations/ssr-hydration' },
-            { text: 'Stale-While-Revalidate', link: '/visualizations/stale-while-revalidate' }
+            { text: 'HTTP Lifecycle', link: '/visualizations/http-lifecycle.html' },
+            { text: 'Cache Decision Tree', link: '/visualizations/cache-decision-tree.html' },
+            { text: 'Multi-Layer Cache', link: '/visualizations/multi-layer-cache.html' },
+            { text: 'SSR & Hydration', link: '/visualizations/ssr-hydration.html' },
+            { text: 'Stale-While-Revalidate', link: '/visualizations/stale-while-revalidate.html' }
           ]
         }
       ]

@@ -15,7 +15,7 @@
 | 08 | [CDN](/quizzes/quiz-08-cdn.html) | POP, edge, purging, cache hierarchy |
 | 09 | [Multi-layer](/quizzes/quiz-09-multi-layer.html) | Cache cohérence, invalidation, surrogate keys |
 | 10 | [SSR](/quizzes/quiz-10-ssr.html) | Server-side rendering, hydration, streaming SSR |
-| 11 | [ISR](/quizzes/quiz-11-isr.html) | Static generation, incremental regeneration |
+| 11 | [ISR](/quizzes/quiz-11-isr.html) | Static génération, incremental regeneration |
 | 12 | [Edge](/quizzes/quiz-12-edge.html) | Edge functions, edge SSR, Workers |
 | 13 | [Streaming](/quizzes/quiz-13-streaming.html) | Chunked transfer, ReadableStream, SSE |
 | 14 | [Performance](/quizzes/quiz-14-performance.html) | Core Web Vitals, Lighthouse, waterfall |

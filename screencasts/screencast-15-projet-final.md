@@ -48,7 +48,7 @@ ls -la labs/lab-15-final-project/
 # pages/           - Pages SSR
 ```
 
-> Chaque couche a un rôle précis. Le Service Worker gère le cache offline et la stratégie SWR côté client. Le CDN absorbe le trafic public. Le reverse proxy cache les réponses API fréquentes. Et le serveur d'origine est le dernier recours.
+> Chaque couche à un rôle précis. Le Service Worker gère le cache offline et la stratégie SWR côté client. Le CDN absorbe le trafic public. Le reverse proxy cache les réponses API fréquentes. Et le serveur d'origine est le dernier recours.
 
 ### [04:30-08:00] Configuration du cache par type de ressource
 

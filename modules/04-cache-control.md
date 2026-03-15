@@ -1,15 +1,15 @@
 # Module 04 — Cache-Control — Le chef d'orchestre
 
-> **Objectif** : Maitriser completement le header Cache-Control, comprendre le cycle de vie d'une reponse cachee, et savoir choisir la bonne combinaison de directives pour chaque situation.
-> **Difficulte** : ⭐⭐ (Intermediaire)
+> **Objectif** : Maîtriser complètement le header Cache-Control, comprendre le cycle de vie d'une réponse cachee, et savoir choisir la bonne combinaison de directives pour chaque situation.
+> **Difficulte** : ⭐⭐ (Intermédiaire)
 
 ---
 
-## 1. Le cycle de vie d'une reponse cachee
+## 1. Le cycle de vie d'une réponse cachee
 
 ### 1.1 L'analogie du yaourt dans le frigo
 
-Une reponse cachee, c'est comme un yaourt dans ton frigo :
+Une réponse cachee, c'est comme un yaourt dans ton frigo :
 
 ```
 ACHAT                PEREMPTION             VERIFICATION
@@ -70,13 +70,13 @@ Stale (perime) = max-age expire, mais la copie existe encore
 Revalidation   = demander au serveur si la copie stale est encore bonne
 ```
 
-### 1.3 Les trois etats d'une reponse cachee
+### 1.3 Les trois états d'une réponse cachee
 
-| Etat        | Condition                        | Action du cache                          |
+| État        | Condition                        | Action du cache                          |
 |-------------|----------------------------------|------------------------------------------|
-| **Fresh**   | Age < max-age                    | Servir directement, SANS requete reseau  |
+| **Fresh**   | Age < max-age                    | Servir directement, SANS requête réseau  |
 | **Stale**   | Age >= max-age                   | Revalider aupres du serveur              |
-| **Absent**  | Pas dans le cache                | Requete complete au serveur              |
+| **Absent**  | Pas dans le cache                | Requête complete au serveur              |
 
 ```typescript
 // Exemple : observer l'age d'une reponse
@@ -127,7 +127,7 @@ Cache-Control: public, max-age=3600, must-revalidate
 |----------------------|-----------|------------------------------------------------------------|
 | `max-age`            | secondes  | Duree de fraicheur (ex: `max-age=3600` = 1 heure)         |
 | `s-maxage`           | secondes  | Comme max-age mais UNIQUEMENT pour les caches partages     |
-| `no-cache`           | -         | Le cache DOIT revalider a chaque utilisation               |
+| `no-cache`           | -         | Le cache DOIT revalider à chaque utilisation               |
 | `no-store`           | -         | Ne RIEN stocker dans aucun cache                           |
 | `public`             | -         | Tout le monde peut cacher (y compris CDN, proxies)         |
 | `private`            | -         | Seul le navigateur peut cacher (pas CDN, pas proxy)        |
@@ -142,9 +142,9 @@ Cache-Control: public, max-age=3600, must-revalidate
 
 | Directive            | Valeur    | Description                                                |
 |----------------------|-----------|------------------------------------------------------------|
-| `max-age`            | secondes  | "Je n'accepte pas de reponse plus vieille que X secondes"  |
-| `max-stale`          | secondes  | "J'accepte une reponse perimee depuis au plus X secondes"  |
-| `min-fresh`          | secondes  | "Je veux une reponse fraiche pendant encore au moins X s"  |
+| `max-age`            | secondes  | "Je n'accepte pas de réponse plus vieille que X secondes"  |
+| `max-stale`          | secondes  | "J'accepte une réponse perimee depuis au plus X secondes"  |
+| `min-fresh`          | secondes  | "Je veux une réponse fraiche pendant encore au moins X s"  |
 | `no-cache`           | -         | "Ne me sers pas du cache sans revalider"                   |
 | `no-store`           | -         | "Ne stocke rien"                                           |
 | `no-transform`       | -         | "Ne modifie pas le contenu"                                |
@@ -160,7 +160,7 @@ Cache-Control: public, max-age=3600, must-revalidate
 Cache-Control: max-age=3600
 ```
 
-Signifie : "Cette reponse est fraiche pendant **3600 secondes** (1 heure) a partir de maintenant."
+Signifie : "Cette réponse est fraiche pendant **3600 secondes** (1 heure) à partir de maintenant."
 
 ```
 Temps:   0s         1800s        3600s        5400s
@@ -178,7 +178,7 @@ Temps:   0s         1800s        3600s        5400s
 
 | Scenario                     | max-age       | Duree        |
 |------------------------------|---------------|--------------|
-| Donnees temps-reel (bourse)  | `max-age=0`   | 0 seconde    |
+| Donnees temps-réel (bourse)  | `max-age=0`   | 0 seconde    |
 | Page d'accueil dynamique     | `max-age=60`  | 1 minute     |
 | Page de blog                 | `max-age=3600`| 1 heure      |
 | Image de profil              | `max-age=86400`| 1 jour      |
@@ -227,7 +227,7 @@ NAVIGATEUR                CDN                    SERVEUR
 
 ### 3.3 no-cache vs no-store — LA confusion la plus courante
 
-C'est **LE** piege numero 1 de Cache-Control. Les noms sont trompeurs.
+C'est **LE** piege numéro 1 de Cache-Control. Les noms sont trompeurs.
 
 ```
 +------------------------------------------------------------------+
@@ -244,7 +244,7 @@ C'est **LE** piege numero 1 de Cache-Control. Les noms sont trompeurs.
 
 **Analogie** :
 - `no-cache` : Tu gardes la photocopie dans ton tiroir, mais avant de l'utiliser, tu appelles l'auteur pour confirmer qu'elle est encore a jour.
-- `no-store` : Tu ne fais meme pas de photocopie. Chaque fois que tu en as besoin, tu vas chercher l'original.
+- `no-store` : Tu ne fais même pas de photocopie. Chaque fois que tu en as besoin, tu vas chercher l'original.
 
 ```
 no-cache : STOCKE + REVALIDE TOUJOURS
@@ -370,15 +370,15 @@ La reponse est specifique a UN utilisateur.
 Ideal pour : tableaux de bord, profils, paniers d'achat.
 ```
 
-**Pourquoi c'est important ?** Si ta page contient des infos personnelles (nom, email, solde bancaire) et que tu mets `public`, un CDN pourrait la cacher et la servir a un AUTRE utilisateur. `private` empeche ca.
+**Pourquoi c'est important ?** Si ta page contient des infos personnelles (nom, email, solde bancaire) et que tu mets `public`, un CDN pourrait la cacher et la servir à un AUTRE utilisateur. `private` empeche ça.
 
-### 3.5 immutable — "Ca ne changera JAMAIS"
+### 3.5 immutable — "Ça ne changera JAMAIS"
 
 ```
 Cache-Control: public, max-age=31536000, immutable
 ```
 
-Signifie : "Ce fichier ne sera JAMAIS modifie. Meme si l'utilisateur recharge la page, n'envoie PAS de requete de revalidation."
+Signifie : "Ce fichier ne sera JAMAIS modifie. Même si l'utilisateur recharge la page, n'envoie PAS de requête de revalidation."
 
 ```
 SANS immutable :
@@ -416,7 +416,7 @@ Ces fichiers sont des candidats PARFAITS pour immutable car :
 Cache-Control: max-age=3600, must-revalidate
 ```
 
-Signifie : "Frais pendant 1 heure. Apres ca, tu DOIS revalider. Si tu ne peux pas joindre le serveur, renvoie une erreur 504, mais ne sers PAS la copie perimee."
+Signifie : "Frais pendant 1 heure. Après ça, tu DOIS revalider. Si tu ne peux pas joindre le serveur, renvoie une erreur 504, mais ne sers PAS la copie perimee."
 
 ```
 SANS must-revalidate :
@@ -444,7 +444,7 @@ Utilisateur recoit : Erreur 504 Gateway Timeout
 Cache-Control: max-age=60, stale-while-revalidate=30, stale-if-error=86400
 ```
 
-**stale-while-revalidate** : "Apres expiration, sers la copie stale immediatement ET revalide en arriere-plan."
+**stale-while-revalidate** : "Après expiration, sers la copie stale immediatement ET revalide en arriere-plan."
 
 ```
 SANS stale-while-revalidate :
@@ -634,7 +634,7 @@ server.listen(3000, () => console.log('http://localhost:3000'));
 | Dashboard utilisateur             | `private, no-cache`                                               |
 | Donnees sensibles                 | `no-store`                                                        |
 | Page derriere CDN + navigateur    | `public, max-age=60, s-maxage=3600`                               |
-| Reponse API temps-reel            | `no-cache` (ou `max-age=0, must-revalidate`)                      |
+| Reponse API temps-réel            | `no-cache` (où `max-age=0, must-revalidate`)                      |
 
 ---
 
@@ -812,25 +812,25 @@ Probleme d'Expires :
 - max-age est PRIORITAIRE sur Expires (si les deux sont presents)
 ```
 
-**Regle simple** : Utilise toujours `Cache-Control: max-age` a la place de `Expires`. Si tu vois encore `Expires`, c'est pour la compatibilite avec de tres vieux clients HTTP/1.0.
+**Regle simple** : Utilise toujours `Cache-Control: max-age` à la place de `Expires`. Si tu vois encore `Expires`, c'est pour la compatibilite avec de très vieux clients HTTP/1.0.
 
 ---
 
-## Points cles
+## Points clés
 
-1. **Le cycle de vie** : Fresh (frais) -> Stale (perime) -> Revalidation (verification).
-2. **max-age** definit la duree de fraicheur en secondes. **s-maxage** est pour les caches partages (CDN).
+1. **Le cycle de vie** : Fresh (frais) -> Stale (perime) -> Revalidation (vérification).
+2. **max-age** définit la duree de fraicheur en secondes. **s-maxage** est pour les caches partages (CDN).
 3. **no-cache** = stocke mais revalide toujours. **no-store** = ne stocke rien. C'est la confusion la plus frequente.
 4. **public** = tout le monde peut cacher. **private** = navigateur seulement. Important pour les donnees utilisateur.
 5. **immutable** = jamais de revalidation. Uniquement pour les fichiers avec un hash dans le nom.
-6. **stale-while-revalidate** et **stale-if-error** ameliorent la performance et la resilience.
+6. **stale-while-revalidate** et **stale-if-error** ameliorent la performance et la résilience.
 7. **Expires** est obsolete. Preferer **max-age**.
 
 ---
 
 ## Lab associe
 
--> `labs/04-strategies-cache-control.md` — Configurer Cache-Control pour differents types de ressources
+-> `labs/04-strategies-cache-control.md` — Configurer Cache-Control pour différents types de ressources
 
 ---
 
@@ -861,7 +861,7 @@ Avec ces 4 recettes, tu couvres 90% des cas.
 
 ### Objectif
 
-Observer le comportement de Cache-Control dans Chrome DevTools en utilisant le serveur du lab-03. Comprendre la difference entre hard refresh et refresh normal, le role de "Disable cache", et la distinction entre memory cache et disk cache.
+Observer le comportement de Cache-Control dans Chrome DevTools en utilisant le serveur du lab-03. Comprendre la différence entre hard refresh et refresh normal, le role de "Disable cache", et la distinction entre memory cache et disk cache.
 
 ### Etapes
 
@@ -876,31 +876,31 @@ Observer le comportement de Cache-Control dans Chrome DevTools en utilisant le s
    - Ouvre Chrome et va sur `http://localhost:3000`
    - Ouvre DevTools (`F12`) > onglet **Network**
    - Recharge la page (`F5`)
-   - Clique sur chaque requete et examine les **Response Headers** :
+   - Clique sur chaque requête et examine les **Response Headers** :
      - Repere le header `Cache-Control` sur chaque ressource
-     - Note les differentes valeurs : `max-age=...`, `no-cache`, `no-store`, `public`, `private`, `immutable`
+     - Note les différentes valeurs : `max-age=...`, `no-cache`, `no-store`, `public`, `private`, `immutable`
    - Observe la colonne **Size** : toutes les ressources affichent une taille en octets (premier chargement, pas de cache)
 
 3. **Refresh normal (F5) — Observer le cache en action**
    - Appuie sur `F5` pour recharger normalement
-   - Observe la colonne **Size** dans la liste des requetes :
+   - Observe la colonne **Size** dans la liste des requêtes :
      - Les ressources avec `max-age` eleve apparaissent comme `(from memory cache)` ou `(from disk cache)`
      - Les ressources avec `no-cache` montrent un status `304 Not Modified` (si ETag present)
-     - Les ressources avec `no-store` sont toujours telechargees depuis le reseau
+     - Les ressources avec `no-store` sont toujours telechargees depuis le réseau
    - Observe la colonne **Time** : les ressources en cache affichent `0 ms` ou quelques millisecondes
 
 4. **Hard refresh (Ctrl+Shift+R) — Contourner le cache**
    - Appuie sur `Ctrl+Shift+R` (Windows/Linux) ou `Cmd+Shift+R` (Mac)
-   - Observe que **toutes** les ressources sont telechargees depuis le reseau
-   - Le navigateur envoie un header de requete `Cache-Control: no-cache` qui force le serveur a renvoyer le contenu complet
+   - Observe que **toutes** les ressources sont telechargees depuis le réseau
+   - Le navigateur envoie un header de requête `Cache-Control: no-cache` qui force le serveur a renvoyer le contenu complet
    - Compare les temps de chargement : le hard refresh est plus lent que le refresh normal
 
 5. **"Disable cache" — Le mode sans cache de DevTools**
    - Coche la case **Disable cache** en haut de l'onglet Network
    - Recharge la page avec `F5`
-   - Observe que meme les ressources avec `max-age=31536000` sont re-telechargees
+   - Observe que même les ressources avec `max-age=31536000` sont re-telechargees
    - **Important** : "Disable cache" ne fonctionne que quand DevTools est ouvert. Decoche-la quand tu as fini de debugger.
-   - Decoche **Disable cache** pour les etapes suivantes
+   - Decoche **Disable cache** pour les étapes suivantes
 
 6. **Observer memory cache vs disk cache**
    - Ferme l'onglet de la page (mais garde DevTools ouvert dans un autre onglet)
@@ -909,16 +909,16 @@ Observer le comportement de Cache-Control dans Chrome DevTools en utilisant le s
      - `(from disk cache)` — la ressource etait sur le disque dur (persiste entre les onglets/sessions)
    - Sans fermer l'onglet, recharge avec `F5` :
      - Certaines ressources passent de `(from disk cache)` a `(from memory cache)` — elles sont maintenant en RAM, encore plus rapide
-   - Regle a retenir :
+   - Regle à retenir :
      - **memory cache** : lie a l'onglet ouvert, ultra-rapide (~0 ms), disparait quand l'onglet est ferme
-     - **disk cache** : persiste sur le disque, rapide (~5 ms), survit a la fermeture du navigateur
+     - **disk cache** : persiste sur le disque, rapide (~5 ms), survit à la fermeture du navigateur
 
 7. **Observer le decompte du max-age**
    - Clique sur une ressource avec `max-age=60` (par exemple)
-   - Dans les **Response Headers**, note la valeur du header `Date` (date de la reponse originale)
-   - Recharge apres quelques secondes : si le `max-age` n'est pas expire, la ressource est servie depuis le cache
-   - Attends que le `max-age` expire, puis recharge : le navigateur envoie une nouvelle requete au serveur
-   - Tu peux voir le header de requete `If-None-Match` apparaitre quand le cache est expire (revalidation)
+   - Dans les **Response Headers**, note la valeur du header `Date` (date de la réponse originale)
+   - Recharge après quelques secondes : si le `max-age` n'est pas expire, la ressource est servie depuis le cache
+   - Attends que le `max-age` expire, puis recharge : le navigateur envoie une nouvelle requête au serveur
+   - Tu peux voir le header de requête `If-None-Match` apparaître quand le cache est expire (revalidation)
 
 ### Ce que tu devrais observer
 
@@ -941,10 +941,10 @@ Apres expiration du max-age :
 
 ### Questions de reflexion
 
-- Pourquoi les ressources avec `no-store` sont-elles toujours telechargees, meme lors d'un refresh normal ?
-- Quelle est la difference pratique entre `(from memory cache)` et `(from disk cache)` pour l'utilisateur ?
-- Pourquoi "Disable cache" est-il utile pendant le developpement, mais dangereux a laisser active en production-test ?
-- Apres expiration du `max-age`, pourquoi le navigateur envoie-t-il un `304` plutot qu'un `200` complet ?
+- Pourquoi les ressources avec `no-store` sont-elles toujours telechargees, même lors d'un refresh normal ?
+- Quelle est la différence pratique entre `(from memory cache)` et `(from disk cache)` pour l'utilisateur ?
+- Pourquoi "Disable cache" est-il utile pendant le développement, mais dangereux a laisser active en production-test ?
+- Après expiration du `max-age`, pourquoi le navigateur envoie-t-il un `304` plutot qu'un `200` complet ?
 
 ---
 
@@ -960,9 +960,9 @@ Apres expiration du max-age :
 2. La page d'accueil `index.html` d'un site d'actualites (change toutes les 5 minutes)
 3. L'endpoint `/api/me` qui renvoie le profil de l'utilisateur connecte
 4. Un fichier PDF de facture accessible uniquement par l'utilisateur concerne
-5. L'endpoint `/api/stock-price` qui renvoie le prix d'une action en temps reel
+5. L'endpoint `/api/stock-price` qui renvoie le prix d'une action en temps réel
 6. Une image de fond `/bg-pattern.png` utilisee sur toutes les pages (change rarement)
-7. L'endpoint `/api/feed` d'un reseau social, qui doit rester disponible meme si le serveur tombe
+7. L'endpoint `/api/feed` d'un réseau social, qui doit rester disponible même si le serveur tombe
 
 <details>
 <summary>Reponses</summary>
@@ -971,16 +971,16 @@ Apres expiration du max-age :
    Le hash change si le contenu change, donc on peut cacher agressivement.
 
 2. **index.html** : `public, max-age=300, must-revalidate` ou `public, s-maxage=300, max-age=60`
-   5 minutes de fraicheur, revalidation obligatoire apres.
+   5 minutes de fraicheur, revalidation obligatoire après.
 
 3. **/api/me** : `private, no-cache`
-   Donnees specifiques a l'utilisateur, toujours revalider.
+   Donnees spécifiques a l'utilisateur, toujours revalider.
 
 4. **Facture PDF** : `private, no-store` ou `private, max-age=0, must-revalidate`
    Donnees confidentielles, soit ne pas stocker, soit revalider strictement.
 
 5. **/api/stock-price** : `no-store` ou `max-age=0, must-revalidate`
-   Donnees temps-reel, toute version en cache est potentiellement trompeuse.
+   Donnees temps-réel, toute version en cache est potentiellement trompeuse.
 
 6. **bg-pattern.png** : `public, max-age=86400` (1 jour)
    Change rarement, mais comme il n'y a pas de hash dans le nom, on ne peut pas mettre 1 an.
@@ -989,3 +989,13 @@ Apres expiration du max-age :
    Frais 1 minute, peut servir stale pendant revalidation, et si le serveur tombe, servir stale pendant 24h.
 
 </details>
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 04 cache control](../screencasts/screencast-04-cache-control.md)
+2. **Visualisation** : [Cache Decision Tree](../visualizations/cache-decision-tree.html)
+3. **Quiz** : [quiz 04 cache control](../quizzes/quiz-04-cache-control.html)
+:::

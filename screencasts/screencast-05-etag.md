@@ -33,7 +33,7 @@ cd labs/lab-05-etag-flow
 node exercise.js
 ```
 
-> Première requête : le client demande la ressource pour la première fois.
+> Première requête : le client demandé la ressource pour la première fois.
 
 ```bash
 curl -v http://localhost:3000/article/1
@@ -43,7 +43,7 @@ curl -v http://localhost:3000/article/1
 
 > Le serveur répond avec un 200 OK, le corps de la réponse, et un en-tête `ETag`. Regardez : `ETag: "a1b2c3d4"`. C'est l'empreinte de cette version de l'article. Le serveur envoie aussi `Cache-Control: no-cache` pour forcer la revalidation à chaque requête.
 
-> Maintenant, deuxième requête. Le navigateur a la réponse en cache avec son ETag. Il envoie une requête conditionnelle.
+> Maintenant, deuxième requête. Le navigateur à la réponse en cache avec son ETag. Il envoie une requête conditionnelle.
 
 ```bash
 curl -v -H 'If-None-Match: "a1b2c3d4"' http://localhost:3000/article/1

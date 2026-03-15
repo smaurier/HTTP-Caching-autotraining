@@ -20,7 +20,7 @@
 
 **Action** : Afficher le slide "Module 09 — Cache multi-couches".
 
-> Le cache multi-couches, c'est quand chaque requête traverse potentiellement : le memory cache du navigateur, le disk cache, le Service Worker, un CDN edge, un reverse proxy (Varnish/Nginx), un cache applicatif (Redis), et enfin la base de données. Chaque couche a un rôle, et la clé c'est de bien les coordonner.
+> Le cache multi-couches, c'est quand chaque requête traverse potentiellement : le memory cache du navigateur, le disk cache, le Service Worker, un CDN edge, un reverse proxy (Varnish/Nginx), un cache applicatif (Redis), et enfin la base de données. Chaque couche à un rôle, et la clé c'est de bien les coordonner.
 
 ### [01:30-04:30] L'architecture en couches — Vue d'ensemble
 
@@ -44,7 +44,7 @@ curl -v http://localhost:3000/api/products/1
 
 **Action** : Montrer les en-têtes de chaque couche dans la réponse.
 
-> Regardez les en-têtes de réponse. `X-CDN-Cache: MISS`, `X-Proxy-Cache: MISS` — c'est la première requête, aucun cache n'a la réponse. Le serveur d'origine a été sollicité.
+> Regardez les en-têtes de réponse. `X-CDN-Cache: MISS`, `X-Proxy-Cache: MISS` — c'est la première requête, aucun cache n'à la réponse. Le serveur d'origine a été sollicité.
 
 ```bash
 # Deuxième requête
@@ -67,7 +67,7 @@ curl -I http://localhost:3000/assets/bundle.a1b2c3.js
 # X-CDN-Cache: HIT
 ```
 
-> Les pages HTML : pas de cache longue durée, revalidation obligatoire. `Cache-Control: no-cache`. Le CDN et le navigateur stockent, mais revalident à chaque requête. Pourquoi ? Parce que le HTML référence les assets. Si l'utilisateur a un vieux HTML en cache, il demande les anciens assets avec les anciens hash, et il ne voit jamais les mises à jour.
+> Les pages HTML : pas de cache longue durée, revalidation obligatoire. `Cache-Control: no-cache`. Le CDN et le navigateur stockent, mais revalident à chaque requête. Pourquoi ? Parce que le HTML référence les assets. Si l'utilisateur à un vieux HTML en cache, il demandé les anciens assets avec les anciens hash, et il ne voit jamais les mises à jour.
 
 ```bash
 curl -I http://localhost:3000/
@@ -138,9 +138,9 @@ curl http://localhost:3000/api/products/1
 
 **Action** : Afficher un schéma du cache stampede.
 
-> Le cache stampede (ou thunder herd). Imaginez : le cache expire, et 1000 utilisateurs font la même requête au même moment. Le CDN fait 1000 requêtes à l'origine. Votre serveur s'effondre.
+> Le cache stampede (où thunder herd). Imaginez : le cache expire, et 1000 utilisateurs font la même requête au même moment. Le CDN fait 1000 requêtes à l'origine. Votre serveur s'effondre.
 
-> La solution : le request collapsing (ou request coalescing). Le CDN regroupe les requêtes identiques et n'en envoie qu'une seule à l'origine. Tous les CDN professionnels font ça. Notre mini-CDN aussi peut l'implémenter.
+> La solution : le request collapsing (où request coalescing). Le CDN regroupe les requêtes identiques et n'en envoie qu'une seule à l'origine. Tous les CDN professionnels font ça. Notre mini-CDN aussi peut l'implémenter.
 
 > Le cache warming. Au lieu d'attendre le premier utilisateur pour remplir le cache, on le remplit proactivement après un déploiement.
 
@@ -152,7 +152,7 @@ for url in /api/products /api/categories /api/featured; do
 done
 ```
 
-> Après un déploiement, on parcourt les URLs les plus populaires pour remplir le cache du CDN. Comme ça, le premier vrai utilisateur a un cache hit.
+> Après un déploiement, on parcourt les URLs les plus populaires pour remplir le cache du CDN. Comme ça, le premier vrai utilisateur à un cache hit.
 
 ### [12:30-14:00] Monitoring et debug — Vérifier que tout fonctionne
 

@@ -32,9 +32,9 @@
 
 > Deuxième couche : le Service Worker cache. Si un Service Worker est installé, il peut intercepter les requêtes et répondre avec sa propre version en cache. On va s'y attarder.
 
-> Troisième couche : le disk cache (ou HTTP cache). C'est le cache HTTP classique, celui qui respecte les directives Cache-Control. Les ressources sont stockées sur le disque dur. Quand vous voyez "(from disk cache)" dans les DevTools, c'est lui.
+> Troisième couche : le disk cache (où HTTP cache). C'est le cache HTTP classique, celui qui respecte les directives Cache-Control. Les ressources sont stockées sur le disque dur. Quand vous voyez "(from disk cache)" dans les DevTools, c'est lui.
 
-> Et enfin, si aucun cache n'a la ressource, le navigateur fait une vraie requête réseau.
+> Et enfin, si aucun cache n'à la ressource, le navigateur fait une vraie requête réseau.
 
 **Action** : Lancer le serveur du lab et ouvrir la page de démo.
 
@@ -82,7 +82,7 @@ self.addEventListener('fetch', (event) => {
 });
 ```
 
-> Ce Service Worker fait deux choses. A l'installation, il pré-cache les ressources essentielles de l'application. Ensuite, à chaque requête, il vérifie d'abord dans le cache. Si la ressource est en cache, il la sert directement. Sinon, il la demande au réseau. C'est la stratégie "Cache First".
+> Ce Service Worker fait deux choses. A l'installation, il pré-cache les ressources essentielles de l'application. Ensuite, à chaque requête, il vérifie d'abord dans le cache. Si la ressource est en cache, il la sert directement. Sinon, il la demandé au réseau. C'est la stratégie "Cache First".
 
 **Action** : Enregistrer le Service Worker et montrer dans les DevTools Application > Service Workers.
 

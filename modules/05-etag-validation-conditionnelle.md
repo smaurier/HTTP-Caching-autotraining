@@ -1,15 +1,15 @@
 # Module 05 — ETag & Validation conditionnelle
 
-> **Objectif** : Comprendre les mecanismes de validation conditionnelle (ETag, Last-Modified), savoir implementer la revalidation dans un serveur Node.js, et maitriser le flow complet requete -> 304 -> cache.
-> **Difficulte** : ⭐⭐ (Intermediaire)
+> **Objectif** : Comprendre les mécanismes de validation conditionnelle (ETag, Last-Modified), savoir implementer la revalidation dans un serveur Node.js, et maîtriser le flow complet requête -> 304 -> cache.
+> **Difficulte** : ⭐⭐ (Intermédiaire)
 
 ---
 
 ## 1. Pourquoi la validation conditionnelle ?
 
-### 1.1 Le probleme : re-telecharger pour rien
+### 1.1 Le problème : re-telecharger pour rien
 
-**Analogie du dictionnaire** : Tu as un dictionnaire de 2000 pages (2 Mo) sur ton bureau. Tous les mois, l'editeur publie une nouvelle edition. La plupart du temps, rien n'a change. Mais sans moyen de verifier, tu dois racheter le dictionnaire entier chaque mois, "au cas ou".
+**Analogie du dictionnaire** : Tu as un dictionnaire de 2000 pages (2 Mo) sur ton bureau. Tous les mois, l'editeur publie une nouvelle edition. La plupart du temps, rien n'a change. Mais sans moyen de vérifier, tu dois racheter le dictionnaire entier chaque mois, "au cas où".
 
 ```
 SANS VALIDATION CONDITIONNELLE :
@@ -56,7 +56,7 @@ Total transfere : 1.2004 Mo (economie de 2.4 Mo = 66% !)
 
 ### 1.2 Le concept de validateur
 
-Un **validateur** est une information qui permet de verifier si une ressource a change sans telecharger tout son contenu.
+Un **validateur** est une information qui permet de vérifier si une ressource a change sans telecharger tout son contenu.
 
 Il existe deux types de validateurs :
 
@@ -79,8 +79,8 @@ Il existe deux types de validateurs :
 ```
 
 **Analogie** :
-- **ETag** : c'est comme le numero de serie d'un produit. Si le produit est identique, le numero est le meme. Si une seule vis change, le numero est different.
-- **Last-Modified** : c'est comme la date imprimee sur l'emballage. Moins precis (deux produits differents fabriques la meme seconde auraient la meme date).
+- **ETag** : c'est comme le numéro de serie d'un produit. Si le produit est identique, le numéro est le même. Si une seule vis change, le numéro est différent.
+- **Last-Modified** : c'est comme la date imprimee sur l'emballage. Moins précis (deux produits différents fabriques la même seconde auraient la même date).
 
 ---
 
@@ -88,7 +88,7 @@ Il existe deux types de validateurs :
 
 ### 2.1 Qu'est-ce qu'un ETag ?
 
-Un ETag (Entity Tag) est une **chaine opaque** qui identifie une version specifique d'une ressource.
+Un ETag (Entity Tag) est une **chaine opaque** qui identifie une version spécifique d'une ressource.
 
 ```
 ETag: "33a64df551425fcc55e4d42a148795d9f25f89d4"
@@ -107,7 +107,7 @@ ETag: "article-42-1709808600"
 **Regles :**
 - L'ETag est **entoure de guillemets** (c'est obligatoire dans la spec HTTP)
 - Le client ne doit **pas interpreter** le contenu de l'ETag (c'est opaque)
-- Deux ressources identiques octet-par-octet doivent avoir le **meme ETag**
+- Deux ressources identiques octet-par-octet doivent avoir le **même ETag**
 - Si le contenu change d'un seul octet, l'ETag **doit changer**
 
 ### 2.2 Strong ETag vs Weak ETag
@@ -136,7 +136,7 @@ partiel), comparaison stricte.
 
 **Quand utiliser un weak ETag ?**
 
-Imagine une page web generee dynamiquement qui contient l'heure du serveur dans un commentaire HTML :
+Imagine une page web générée dynamiquement qui contient l'heure du serveur dans un commentaire HTML :
 
 ```html
 <!-- Generated at 2026-03-07T10:30:00Z -->
@@ -146,9 +146,9 @@ Imagine une page web generee dynamiquement qui contient l'heure du serveur dans 
 <html><body><h1>Contenu identique</h1></body></html>
 ```
 
-Ces deux pages sont **semantiquement identiques** (meme contenu visible) mais **differentes octet par octet** (le commentaire change). Un weak ETag dirait "c'est pareil" alors qu'un strong ETag dirait "c'est different".
+Ces deux pages sont **semantiquement identiques** (même contenu visible) mais **différentes octet par octet** (le commentaire change). Un weak ETag dirait "c'est pareil" alors qu'un strong ETag dirait "c'est différent".
 
-### 2.3 Generer des ETags avec Node.js
+### 2.3 Générer des ETags avec Node.js
 
 ```typescript
 // etag-generation.ts
@@ -223,15 +223,15 @@ console.log('Weak A   :', weakEtagFromContent(contentA));  // IDENTIQUE a B
 console.log('Weak B   :', weakEtagFromContent(contentB));  // IDENTIQUE a A
 ```
 
-**Quelle strategie choisir ?**
+**Quelle stratégie choisir ?**
 
-| Strategie        | Avantages                          | Inconvenients                      | Quand l'utiliser                |
+| Stratégie        | Avantages                          | Inconvenients                      | Quand l'utiliser                |
 |------------------|------------------------------------|------------------------------------|---------------------------------|
 | Hash du contenu  | Precision parfaite                 | Cout CPU (calcul du hash)          | Fichiers statiques, API         |
-| Hash MD5         | Rapide a calculer                  | Collisions theoriques (rare)       | Cas general                     |
+| Hash MD5         | Rapide a calculer                  | Collisions théoriques (rare)       | Cas général                     |
 | Version manuelle | Zero cout de calcul                | Necessite un suivi des versions    | Base de donnees avec versionning|
-| Timestamp        | Simple                             | Precision a la seconde seulement   | Fichiers sur disque             |
-| Weak ETag        | Tolere les differences cosmetiques | Moins precis                       | Contenu dynamique genere        |
+| Timestamp        | Simple                             | Precision à la seconde seulement   | Fichiers sur disque             |
+| Weak ETag        | Tolere les différences cosmetiques | Moins précis                       | Contenu dynamique généré        |
 
 ---
 
@@ -239,7 +239,7 @@ console.log('Weak B   :', weakEtagFromContent(contentB));  // IDENTIQUE a A
 
 ### 3.1 Le concept
 
-`Last-Modified` indique la date de derniere modification de la ressource :
+`Last-Modified` indique la date de dernière modification de la ressource :
 
 ```
 Last-Modified: Thu, 07 Mar 2026 10:30:00 GMT
@@ -254,7 +254,7 @@ Last-Modified: Thu, 07 Mar 2026 10:30:00 GMT
 | Precision            | A la seconde                      | Au bit pres (strong) ou semantique (weak) |
 | Format               | Date HTTP                         | Chaine opaque                     |
 | Cout serveur         | Faible (lire la date du fichier)  | Variable (calcul de hash)         |
-| Fiabilite            | Problemes avec horloges, NFS      | Tres fiable                       |
+| Fiabilite            | Problemes avec horloges, NFS      | Très fiable                       |
 | Priorite HTTP        | Moins prioritaire                 | Plus prioritaire (RFC 9110)       |
 
 **Problemes de Last-Modified :**
@@ -285,7 +285,7 @@ Un load balancer qui envoie les requetes alternativement a A et B
 va produire des Last-Modified incoherents.
 ```
 
-**Regle** : Si tu peux utiliser ETag, utilise ETag. Last-Modified est un **fallback** utile mais moins precis.
+**Regle** : Si tu peux utiliser ETag, utilise ETag. Last-Modified est un **fallback** utile mais moins précis.
 
 ### 3.3 Utiliser les deux ensemble
 
@@ -305,7 +305,7 @@ Le client utilisera ETag en priorite (via `If-None-Match`), mais `Last-Modified`
 
 ---
 
-## 4. Les requetes conditionnelles
+## 4. Les requêtes conditionnelles
 
 ### 4.1 If-None-Match (avec ETag)
 
@@ -408,7 +408,7 @@ Serveur:
 
 ### 4.3 Quand les deux sont presents
 
-Si le client envoie **les deux** headers conditionnels, le serveur doit verifier **les deux** :
+Si le client envoie **les deux** headers conditionnels, le serveur doit vérifier **les deux** :
 
 ```
 Client:
@@ -425,7 +425,7 @@ Serveur :
   Si ETag ne correspond pas              --> 200 (nouveau contenu)
 ```
 
-### 4.4 Diagramme recapitulatif
+### 4.4 Diagramme récapitulatif
 
 ```
 Client envoie une requete GET
@@ -652,7 +652,7 @@ server.listen(3000, () => {
 });
 ```
 
-### 5.2 Tester le serveur etape par etape
+### 5.2 Tester le serveur étape par étape
 
 ```bash
 # ETAPE 1 : Premier chargement (200 OK avec ETag)
@@ -689,7 +689,7 @@ curl -v -H 'If-None-Match: "a1b2c3d4e5f6g7h8"' \
 
 ## 6. Performance : les chiffres
 
-### 6.1 Comparaison des tailles de reponse
+### 6.1 Comparaison des tailles de réponse
 
 ```
 +---------------------------------------------------+
@@ -880,7 +880,7 @@ server.listen(3000, () => {
 
 ## 8. ETag et les outils de build
 
-### 8.1 La strategie "hash dans le nom" vs ETag
+### 8.1 La stratégie "hash dans le nom" vs ETag
 
 ```
 DEUX STRATEGIES COMPLEMENTAIRES
@@ -921,7 +921,7 @@ Les assets avec hash sont caches pour toujours.
 Les images sans hash utilisent ETag pour revalidation.
 ```
 
-### 8.2 Flow complet d'un deploiement
+### 8.2 Flow complet d'un déploiement
 
 ```
 AVANT LE DEPLOIEMENT :
@@ -962,14 +962,14 @@ du HTML + 1 telechargement du nouveau JS.
 
 ---
 
-## Points cles
+## Points clés
 
 1. **La validation conditionnelle** evite de re-telecharger des ressources inchangees, economisant bande passante et temps.
-2. **ETag** est une empreinte du contenu. Strong ETag (`"abc"`) = identique octet par octet. Weak ETag (`W/"abc"`) = semantiquement equivalent.
-3. **Last-Modified** est un validateur base sur la date, moins precis que ETag (precision a la seconde seulement).
+2. **ETag** est une empreinte du contenu. Strong ETag (`"abc"`) = identique octet par octet. Weak ETag (`W/"abc"`) = semantiquement équivalent.
+3. **Last-Modified** est un validateur base sur la date, moins précis que ETag (précision à la seconde seulement).
 4. **If-None-Match** + ETag = couple de revalidation principal. **If-Modified-Since** + Last-Modified = fallback.
-5. **304 Not Modified** economise 95-99% de la bande passante car il n'y a pas de body dans la reponse.
-6. **Combiner hash-dans-le-nom (immutable) et ETag (revalidation)** est la strategie optimale pour un site web moderne.
+5. **304 Not Modified** economise 95-99% de la bande passante car il n'y a pas de body dans la réponse.
+6. **Combiner hash-dans-le-nom (immutable) et ETag (revalidation)** est la stratégie optimale pour un site web moderne.
 
 ---
 
@@ -993,10 +993,10 @@ du HTML + 1 telechargement du nouveau JS.
 
 **Retiens juste ceci :**
 
-1. Le serveur envoie un **ETag** (empreinte) avec la reponse : `ETag: "v1"`
+1. Le serveur envoie un **ETag** (empreinte) avec la réponse : `ETag: "v1"`
 2. La prochaine fois, le client dit : `If-None-Match: "v1"` ("j'ai la version v1, c'est encore bon ?")
-3. Si rien n'a change, le serveur repond **304** (sans body = tres rapide)
-4. Si ca a change, le serveur repond **200** avec le nouveau contenu et un nouvel ETag
+3. Si rien n'a change, le serveur repond **304** (sans body = très rapide)
+4. Si ça a change, le serveur repond **200** avec le nouveau contenu et un nouvel ETag
 
 C'est comme montrer ta photocopie au bureau d'information et demander "c'est encore a jour ?". S'ils disent oui, tu repars avec ta photocopie. S'ils disent non, ils t'en donnent une nouvelle.
 
@@ -1006,7 +1006,7 @@ C'est comme montrer ta photocopie au bureau d'information et demander "c'est enc
 
 ### Objectif
 
-Observer le mecanisme complet de validation conditionnelle dans Chrome DevTools : voir le ETag dans la reponse, le If-None-Match dans la requete suivante, et le status 304 Not Modified. Mesurer les economies de bande passante.
+Observer le mécanisme complet de validation conditionnelle dans Chrome DevTools : voir le ETag dans la réponse, le If-None-Match dans la requête suivante, et le status 304 Not Modified. Mesurer les economies de bande passante.
 
 ### Etapes
 
@@ -1020,12 +1020,12 @@ Observer le mecanisme complet de validation conditionnelle dans Chrome DevTools 
 2. **Premier chargement — Observer le 200 et le ETag**
    - Ouvre Chrome et va sur `http://localhost:3000/api/articles/1`
    - Ouvre DevTools (`F12`) > onglet **Network**
-   - Recharge la page (`F5`) pour capturer la requete
-   - Clique sur la requete dans la liste
+   - Recharge la page (`F5`) pour capturer la requête
+   - Clique sur la requête dans la liste
    - Dans **Response Headers**, repere :
      - `ETag: "..."` — c'est l'empreinte du contenu que le serveur envoie
-     - `Cache-Control: public, max-age=60` — la reponse est fraiche pendant 60 secondes
-     - `Last-Modified: ...` — la date de derniere modification
+     - `Cache-Control: public, max-age=60` — la réponse est fraiche pendant 60 secondes
+     - `Last-Modified: ...` — la date de dernière modification
    - Note la valeur du ETag (par exemple `"a1b2c3d4e5f6g7h8"`)
    - Observe le **Status Code** : `200 OK`
    - Observe la colonne **Size** : une taille en octets (ex: `256 B`) — le body complet a ete transfere
@@ -1034,19 +1034,19 @@ Observer le mecanisme complet de validation conditionnelle dans Chrome DevTools 
    - Attends que le `max-age` expire (60 secondes) ou, pour aller plus vite, coche **Disable cache** puis decoche-la (cela vide le cache temporairement)
    - Sinon, pour forcer la revalidation sans attendre : ferme l'onglet, rouvre-le, et recharge
    - Recharge la page (`F5`)
-   - Clique sur la nouvelle requete
+   - Clique sur la nouvelle requête
    - Dans **Request Headers**, repere :
      - `If-None-Match: "a1b2c3d4e5f6g7h8"` — le navigateur envoie le ETag qu'il avait stocke
    - Dans la ligne de statut, observe : `304 Not Modified`
-   - Observe la colonne **Size** : la taille est tres petite (seulement les headers, pas de body)
+   - Observe la colonne **Size** : la taille est très petite (seulement les headers, pas de body)
 
 4. **Comparer les economies de bande passante**
    - Dans la colonne **Size**, compare :
      - Premier chargement (200) : taille complete du body (ex: `256 B`)
-     - Revalidation (304) : taille tres reduite (ex: `120 B` — seulement les headers)
-   - Pour voir la taille exacte transferee, clique sur la requete 304 et regarde l'onglet **Headers** :
+     - Revalidation (304) : taille très reduite (ex: `120 B` — seulement les headers)
+   - Pour voir la taille exacte transferee, clique sur la requête 304 et regarde l'onglet **Headers** :
      - Il n'y a **pas de section "Response" dans l'onglet Preview/Response** car le body est vide
-   - Observe aussi la colonne **Time** : la reponse 304 est plus rapide car le serveur n'a pas eu a serialiser et envoyer le contenu
+   - Observe aussi la colonne **Time** : la réponse 304 est plus rapide car le serveur n'a pas eu a serialiser et envoyer le contenu
 
 5. **Modifier la ressource et observer le changement de ETag**
    - Dans un autre onglet ou avec curl, modifie la ressource :
@@ -1060,9 +1060,9 @@ Observer le mecanisme complet de validation conditionnelle dans Chrome DevTools 
      - Le navigateur envoie toujours `If-None-Match` avec l'ancien ETag
      - Mais cette fois, le serveur repond `200 OK` avec un **nouveau ETag** (car le contenu a change)
      - La colonne **Size** affiche la taille complete du nouveau contenu
-   - Verifie que le nouvel ETag dans **Response Headers** est different de l'ancien
+   - Verifie que le nouvel ETag dans **Response Headers** est différent de l'ancien
 
-6. **Verifier avec la console du serveur**
+6. **Vérifier avec la console du serveur**
    - Regarde le terminal ou le serveur tourne
    - Tu devrais voir les logs :
    ```
@@ -1098,9 +1098,9 @@ Requete 3 (apres modification du contenu) :
 ### Questions de reflexion
 
 - Pourquoi le navigateur envoie-t-il automatiquement le header `If-None-Match` lors du deuxieme chargement ?
-- Quelle est l'economie de bande passante entre une reponse 200 et une reponse 304 pour cette ressource ?
-- Que se passerait-il si le serveur ne supportait pas les ETags ? (Indice : chaque requete serait un 200 complet)
-- Dans quel onglet de DevTools peux-tu confirmer que la reponse 304 n'a **pas de body** ?
+- Quelle est l'economie de bande passante entre une réponse 200 et une réponse 304 pour cette ressource ?
+- Que se passerait-il si le serveur ne supportait pas les ETags ? (Indice : chaque requête serait un 200 complet)
+- Dans quel onglet de DevTools peux-tu confirmer que la réponse 304 n'a **pas de body** ?
 
 ---
 
@@ -1108,17 +1108,17 @@ Requete 3 (apres modification du contenu) :
 
 ### Implementer un cache intelligent
 
-**Objectif** : Creer un serveur Node.js qui gere correctement les ETags pour une API de taches (todo list).
+**Objectif** : Créer un serveur Node.js qui géré correctement les ETags pour une API de taches (todo list).
 
 **Cahier des charges :**
 
 1. `GET /api/todos` retourne la liste des taches avec un ETag
-2. `GET /api/todos/:id` retourne une tache specifique avec un ETag
-3. `POST /api/todos` cree une tache (l'ETag de la liste change)
+2. `GET /api/todos/:id` retourne une tache spécifique avec un ETag
+3. `POST /api/todos` créé une tache (l'ETag de la liste change)
 4. `PUT /api/todos/:id` modifie une tache (l'ETag de cette tache ET de la liste changent)
 5. `DELETE /api/todos/:id` supprime une tache
-6. Toutes les requetes GET supportent `If-None-Match` pour la revalidation
-7. Le serveur log "304" ou "200" pour chaque requete GET
+6. Toutes les requêtes GET supportent `If-None-Match` pour la revalidation
+7. Le serveur log "304" ou "200" pour chaque requête GET
 
 **Test :**
 
@@ -1235,3 +1235,15 @@ server.listen(3000, () => console.log('http://localhost:3000'));
 ```
 
 </details>
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 05 etag](../screencasts/screencast-05-etag.md)
+2. **Lab** : [lab-04-etag-conditional](../labs/lab-04-etag-conditional/README)
+3. **Visualisation** : [Cache Decision Tree](../visualizations/cache-decision-tree.html)
+4. **Visualisation** : [Stale-While-Revalidate](../visualizations/stale-while-revalidate.html)
+5. **Quiz** : [quiz 05 etag](../quizzes/quiz-05-etag.html)
+:::

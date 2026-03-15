@@ -1,6 +1,6 @@
 # Module 07 — Cache navigateur
 
-> **Objectif** : Comprendre les differentes couches de cache dans un navigateur, maitriser la Service Worker Cache API et les mecanismes de preloading pour optimiser les performances cote client.
+> **Objectif** : Comprendre les différentes couches de cache dans un navigateur, maîtriser la Service Worker Cache API et les mécanismes de preloading pour optimiser les performances cote client.
 > **Difficulte** : :star::star::star:
 
 ---
@@ -9,7 +9,7 @@
 
 ### 1.1 Vue d'ensemble
 
-Quand le navigateur a besoin d'une ressource, il parcourt **4 couches** avant d'aller sur le reseau :
+Quand le navigateur a besoin d'une ressource, il parcourt **4 couches** avant d'aller sur le réseau :
 
 ```
 Requete du navigateur
@@ -37,10 +37,10 @@ Requete du navigateur
 
 ### 1.2 L'analogie de la bibliotheque
 
-- **Memory Cache** = le livre que tu as deja ouvert sur ton bureau (instantane)
+- **Memory Cache** = le livre que tu as déjà ouvert sur ton bureau (instantane)
 - **Service Worker** = ton assistant personnel qui va chercher dans tes etageres selon tes instructions
-- **Disk Cache** = tes etageres a la maison (rapide mais faut se lever)
-- **Network** = aller a la bibliotheque municipale (lent mais complet)
+- **Disk Cache** = tes etageres à la maison (rapide mais faut se lever)
+- **Network** = aller à la bibliotheque municipale (lent mais complet)
 
 ### 1.3 Tableau comparatif
 
@@ -48,7 +48,7 @@ Requete du navigateur
 |--------|----------|---------|-------------|-------------|
 | Memory Cache | RAM | ~0ms | Tab/session | Aucun |
 | Service Worker | Cache API (disk) | ~1-5ms | Permanent | Total |
-| Disk Cache | Systeme fichiers | ~5-20ms | Permanent | Headers HTTP |
+| Disk Cache | Système fichiers | ~5-20ms | Permanent | Headers HTTP |
 | Network | Serveur distant | 50-2000ms | N/A | Headers HTTP |
 
 ---
@@ -57,7 +57,7 @@ Requete du navigateur
 
 ### 2.1 Memory Cache
 
-Le Memory Cache (ou "in-memory cache") est stocke **en RAM**. Il est :
+Le Memory Cache (où "in-memory cache") est stocke **en RAM**. Il est :
 
 - **Cree** quand une page charge des ressources
 - **Detruit** quand l'onglet est ferme
@@ -84,7 +84,7 @@ Le Disk Cache est le **vrai** cache HTTP. Il :
 
 - Respecte les headers `Cache-Control`, `Expires`, `ETag`
 - Persiste entre les sessions (fermer/rouvrir le navigateur)
-- A une taille limitee (gere par le navigateur, souvent 50-250 MB)
+- A une taille limitee (géré par le navigateur, souvent 50-250 MB)
 
 ```
 Exemple : Disk Cache en action
@@ -184,7 +184,7 @@ server.listen(3000, () => {
 
 ### 3.1 Qu'est-ce qu'un Service Worker ?
 
-Un Service Worker est un **proxy programmable** qui s'installe entre le navigateur et le reseau :
+Un Service Worker est un **proxy programmable** qui s'installe entre le navigateur et le réseau :
 
 ```
   Page Web
@@ -210,7 +210,7 @@ Un Service Worker est un **proxy programmable** qui s'installe entre le navigate
 5. (update)      --> Nouvelle version detectee, on recommence
 ```
 
-### 3.3 API Cache : les methodes essentielles
+### 3.3 API Cache : les méthodes essentielles
 
 ```js
 // ---- caches.open(name) ----
@@ -297,7 +297,7 @@ self.addEventListener('activate', (event) => {
 
 ---
 
-## 4. Strategies Service Worker
+## 4. Stratégies Service Worker
 
 ### 4.1 Cache-First
 
@@ -400,7 +400,7 @@ SWR :             Cache ------> [OUI] ----> Reponse
 
 ### 5.1 Qu'est-ce que le bfcache ?
 
-Le **bfcache** (back/forward cache) est un mecanisme du navigateur qui **gele** l'etat complet d'une page quand l'utilisateur la quitte. Quand il appuie sur "Retour", la page est restauree **instantanement** (en memoire, pas re-telecharge).
+Le **bfcache** (back/forward cache) est un mécanisme du navigateur qui **gele** l'état complet d'une page quand l'utilisateur la quitte. Quand il appuie sur "Retour", la page est restauree **instantanement** (en mémoire, pas re-telecharge).
 
 ```
 Page A -----> Navigation vers Page B
@@ -421,10 +421,10 @@ Page B -----> Bouton "Retour"
 |----------|----------|----------|
 | `unload` event listener | Ancien, incompatible | Utiliser `pagehide` |
 | `Cache-Control: no-store` | Empeche la mise en cache | Utiliser `no-cache` si possible |
-| Connexions ouvertes (WebSocket) | Etat reseau non restaurable | Fermer dans `pagehide` |
-| `window.opener` | Reference inter-fenetre | `rel="noopener"` |
+| Connexions ouvertes (WebSocket) | État réseau non restaurable | Fermer dans `pagehide` |
+| `window.opener` | Référence inter-fenêtre | `rel="noopener"` |
 
-### 5.3 Evenements bfcache
+### 5.3 Événements bfcache
 
 ```js
 // Detecter si la page est restauree depuis le bfcache
@@ -458,7 +458,7 @@ Chrome DevTools > Application > Back/forward cache
 
 ## 6. Preload, Prefetch, Preconnect
 
-### 6.1 Les trois mecanismes
+### 6.1 Les trois mécanismes
 
 ```
                     Priorite    Quand        Pour quoi
@@ -650,10 +650,10 @@ AVEC Early Hints (103) :
 
 ---
 
-## Points cles
+## Points clés
 
 1. Le navigateur utilise **4 couches de cache** dans l'ordre : Memory Cache, Service Worker, Disk Cache, Network.
-2. Le **Memory Cache** est volatile (lie a l'onglet) et non controlable par le developpeur.
+2. Le **Memory Cache** est volatile (lie a l'onglet) et non controlable par le développeur.
 3. Le **Disk Cache** est le cache HTTP classique, controle par les headers `Cache-Control`.
 4. La **Service Worker Cache API** donne un controle **total** sur ce qui est cache et comment il est servi.
 5. Le **bfcache** gele et restaure des pages entieres pour une navigation instantanee avec le bouton Retour.
@@ -665,13 +665,13 @@ AVEC Early Hints (103) :
 
 ## Lab associe
 
-> Lab 07 — Construire un Service Worker avec les 3 strategies (Cache-First, Network-First, SWR) et observer les couches de cache dans DevTools
+> Lab 07 — Construire un Service Worker avec les 3 stratégies (Cache-First, Network-First, SWR) et observer les couches de cache dans DevTools
 
 ---
 
 ## Pour aller plus loin
 
-- [web.dev - Service Worker Caching Strategies](https://web.dev/offline-cookbook/)
+- [web.dev - Service Worker Caching Stratégies](https://web.dev/offline-cookbook/)
 - [MDN - Cache API](https://developer.mozilla.org/fr/docs/Web/API/Cache)
 - [web.dev - Back/forward cache](https://web.dev/bfcache/)
 - [web.dev - Preload critical assets](https://web.dev/preload-critical-assets/)
@@ -683,12 +683,12 @@ AVEC Early Hints (103) :
 
 Imagine que tu prepares un repas :
 
-- **Memory Cache** = les ingredients deja sur ton plan de travail (instantane, mais disparaissent quand tu ranges la cuisine)
-- **Service Worker** = ton robot de cuisine programme : tu lui as dit "si on me demande de la soupe, prends celle du frigo ; si on me demande du pain, va a la boulangerie"
+- **Memory Cache** = les ingredients déjà sur ton plan de travail (instantane, mais disparaissent quand tu ranges la cuisine)
+- **Service Worker** = ton robot de cuisine programme : tu lui as dit "si on me demandé de la soupe, prends celle du frigo ; si on me demandé du pain, va à la boulangerie"
 - **Disk Cache** = ton frigo et tes placards (rapide d'acces, persistant)
 - **Network** = aller au supermarche (long, mais tu trouves tout)
 
-Le navigateur regarde d'abord le plan de travail, puis demande au robot, puis ouvre le frigo, et en dernier recours va au supermarche. C'est logique : on commence par le plus rapide.
+Le navigateur regarde d'abord le plan de travail, puis demandé au robot, puis ouvre le frigo, et en dernier recours va au supermarche. C'est logique : on commence par le plus rapide.
 
 ---
 
@@ -696,14 +696,14 @@ Le navigateur regarde d'abord le plan de travail, puis demande au robot, puis ou
 
 ### Objectif
 
-Observer les differentes couches de cache du navigateur dans DevTools : distinguer memory cache et disk cache, inspecter les caches Service Worker dans l'onglet Application, et tester le bfcache.
+Observer les différentes couches de cache du navigateur dans DevTools : distinguer memory cache et disk cache, inspecter les caches Service Worker dans l'onglet Application, et tester le bfcache.
 
 ### Etapes
 
 #### Partie 1 : Memory cache vs Disk cache dans l'onglet Network
 
 1. **Lancer le serveur de test**
-   - Utilise le serveur de la section 2.4 de ce module, ou lance un des serveurs de lab precedent :
+   - Utilise le serveur de la section 2.4 de ce module, ou lance un des serveurs de lab précédent :
    ```bash
    node labs/lab-03-cache-control-lab/solution.js
    ```
@@ -717,7 +717,7 @@ Observer les differentes couches de cache du navigateur dans DevTools : distingu
    - Observe la colonne **Size** :
      - Les ressources cachees apparaissent comme `(from disk cache)`
      - C'est le cache HTTP classique, stocke sur le disque dur
-     - Il survit a la fermeture de l'onglet et meme du navigateur
+     - Il survit à la fermeture de l'onglet et même du navigateur
 
 3. **Observer le memory cache**
    - Sans fermer l'onglet, recharge avec `F5`
@@ -726,37 +726,37 @@ Observer les differentes couches de cache du navigateur dans DevTools : distingu
      - Le memory cache est en RAM : il est plus rapide mais volatil
    - Regle pratique :
      - Les **images** et **scripts** du document courant vont souvent en memory cache
-     - Les ressources chargees pour la premiere fois dans cette session viennent du disk cache
+     - Les ressources chargees pour la première fois dans cette session viennent du disk cache
    - Observe la colonne **Time** : les deux types affichent `0 ms`, mais memory cache est techniquement plus rapide
 
 4. **Filtrer par source de cache**
    - Dans le champ de filtre de l'onglet Network, utilise :
-     - `larger-than:0` pour ne voir que les ressources telechargees depuis le reseau
+     - `larger-than:0` pour ne voir que les ressources telechargees depuis le réseau
      - Ou clique sur les en-tetes de colonnes pour trier par **Size** et regrouper les `(from memory cache)` et `(from disk cache)`
 
 #### Partie 2 : Inspecter les caches Service Worker dans l'onglet Application
 
 5. **Ouvrir l'onglet Application**
    - Dans DevTools, clique sur l'onglet **Application** (s'il n'est pas visible, clique sur `>>` pour le trouver)
-   - Dans le panneau de gauche, developpe la section **Cache Storage**
+   - Dans le panneau de gauche, développé la section **Cache Storage**
 
 6. **Explorer le contenu du cache**
    - Si un Service Worker est installe sur le site, tu verras un ou plusieurs caches nommes (ex: `app-cache-v1`)
    - Clique sur un nom de cache pour voir la liste des URLs stockees
    - Pour chaque entree, tu peux voir :
-     - L'URL de la requete
-     - Les headers de la reponse stockee
-     - Le body de la reponse (onglet **Preview**)
+     - L'URL de la requête
+     - Les headers de la réponse stockee
+     - Le body de la réponse (onglet **Preview**)
 
 7. **Supprimer des entrees de cache**
    - Clique-droit sur une entree et choisis **Delete** pour supprimer une seule ressource
    - Ou clique sur le bouton **Clear** (icone poubelle) pour vider tout un cache
    - Cela permet de tester le comportement de l'application quand le cache est vide
 
-8. **Verifier l'etat du Service Worker**
+8. **Vérifier l'état du Service Worker**
    - Dans le panneau de gauche, clique sur **Service Workers**
    - Tu verras le Service Worker enregistre, son statut (active, waiting, etc.)
-   - Tu peux cocher **Offline** pour simuler une perte de connexion et verifier que le Service Worker sert les ressources depuis le cache
+   - Tu peux cocher **Offline** pour simuler une perte de connexion et vérifier que le Service Worker sert les ressources depuis le cache
 
 #### Partie 3 : Tester le bfcache
 
@@ -767,9 +767,9 @@ Observer les differentes couches de cache du navigateur dans DevTools : distingu
 
 10. **Effectuer le test**
     - Chrome va automatiquement naviguer ailleurs puis revenir sur ta page
-    - Le resultat du test s'affiche :
+    - Le résultat du test s'affiche :
       - **Restaure depuis le bfcache** : la page est compatible, navigation instantanee
-      - **Non restaure** : la page a des elements bloquants
+      - **Non restaure** : la page a des éléments bloquants
     - Si le bfcache echoue, DevTools liste les raisons bloquantes :
       - `unload` event listener
       - `Cache-Control: no-store`
@@ -780,10 +780,10 @@ Observer les differentes couches de cache du navigateur dans DevTools : distingu
     - Navigue vers un autre site (ex: tape `about:blank` dans la barre d'adresse)
     - Appuie sur le bouton **Retour** du navigateur
     - Si le bfcache fonctionne :
-      - La page se restaure **instantanement** (pas de requete reseau, pas de re-execution du JS)
-      - Dans l'onglet Network, **aucune nouvelle requete** n'apparait
+      - La page se restaure **instantanement** (pas de requête réseau, pas de re-exécution du JS)
+      - Dans l'onglet Network, **aucune nouvelle requête** n'apparait
     - Si le bfcache ne fonctionne pas :
-      - La page est rechargee normalement avec des requetes reseau
+      - La page est rechargee normalement avec des requêtes réseau
 
 ### Ce que tu devrais observer
 
@@ -808,8 +808,8 @@ Onglet Application > Back/forward cache :
 
 ### Questions de reflexion
 
-- Pourquoi une image apparait-elle en `(from memory cache)` apres un refresh mais en `(from disk cache)` apres la reouverture d'un onglet ?
-- Quelle est la difference entre le Disk Cache (controle par les headers HTTP) et le Cache Storage (controle par le Service Worker) ?
+- Pourquoi une image apparait-elle en `(from memory cache)` après un refresh mais en `(from disk cache)` après la reouverture d'un onglet ?
+- Quelle est la différence entre le Disk Cache (controle par les headers HTTP) et le Cache Storage (controle par le Service Worker) ?
 - Pourquoi `Cache-Control: no-store` bloque-t-il le bfcache ? Quel impact cela a-t-il sur la navigation avec le bouton Retour ?
 - Si tu coches "Offline" dans le panneau Service Workers, quelles ressources sont encore accessibles ? Pourquoi ?
 
@@ -824,10 +824,10 @@ Tu as un site e-commerce avec ces ressources :
 - `/app.abc123.js` (script avec hash)
 - `/api/produits` (catalogue, change toutes les 5 minutes)
 - `/images/hero.webp` (banniere, change chaque semaine)
-- `/api/panier` (panier utilisateur, temps reel)
+- `/api/panier` (panier utilisateur, temps réel)
 
 Pour chaque ressource, indique :
-1. Quelle strategie Service Worker utiliser
+1. Quelle stratégie Service Worker utiliser
 2. Quel header `Cache-Control` configurer cote serveur
 3. Faut-il un `<link rel="preload">` ?
 
@@ -859,3 +859,14 @@ Pour chaque ressource, indique :
   Cache-Control : no-store
   Preload : Non
 ```
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 07 cache navigateur](../screencasts/screencast-07-cache-navigateur.md)
+2. **Lab** : [lab-06-cache-stratégies](../labs/lab-06-cache-strategies/README)
+3. **Visualisation** : [Multi-Layer Cache](../visualizations/multi-layer-cache.html)
+4. **Quiz** : [quiz 07 browser cache](../quizzes/quiz-07-browser-cache.html)
+:::

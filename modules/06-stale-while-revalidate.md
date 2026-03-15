@@ -1,15 +1,15 @@
-# Module 06 — Stale-While-Revalidate & Strategies de cache
+# Module 06 — Stale-While-Revalidate & Stratégies de cache
 
-> **Objectif** : Comprendre les directives `stale-while-revalidate` et `stale-if-error`, puis maitriser les cinq grands patterns de serving pour choisir la bonne strategie selon le contexte.
+> **Objectif** : Comprendre les directives `stale-while-revalidate` et `stale-if-error`, puis maîtriser les cinq grands patterns de serving pour choisir la bonne stratégie selon le contexte.
 > **Difficulte** : :star::star::star:
 
 ---
 
-## 1. Le probleme : cache miss = latence elevee
+## 1. Le problème : cache miss = latence elevee
 
 ### 1.1 Pourquoi un cache miss fait mal
 
-Quand un contenu expire dans le cache, la prochaine requete doit aller jusqu'a l'origin server. Pendant ce temps, l'utilisateur attend.
+Quand un contenu expire dans le cache, la prochaine requête doit aller jusqu'a l'origin server. Pendant ce temps, l'utilisateur attend.
 
 ```
 Scenario SANS stale-while-revalidate
@@ -36,7 +36,7 @@ Imagine une boulangerie. Le pain du matin est en vitrine (le cache). A 14h, le p
 
 ### 1.3 Impact mesurable
 
-| Situation | Temps de reponse | Experience utilisateur |
+| Situation | Temps de réponse | Experience utilisateur |
 |-----------|-----------------|----------------------|
 | Cache hit (frais) | 1-5 ms | Instantane |
 | Cache hit (stale + SWR) | 1-5 ms | Instantane |
@@ -56,7 +56,7 @@ Cache-Control: max-age=60, stale-while-revalidate=120
 Cela signifie :
 - **0-60s** : le contenu est frais, on le sert directement
 - **60-180s** : le contenu est stale, mais on le sert immediatement ET on revalide en arriere-plan
-- **Apres 180s** : le contenu est considere trop vieux, requete bloquante vers l'origin
+- **Après 180s** : le contenu est considere trop vieux, requête bloquante vers l'origin
 
 ### 2.2 Diagramme temporel
 
@@ -110,16 +110,16 @@ server.listen(3000, () => {
 });
 ```
 
-### 2.4 Comment le navigateur gere SWR
+### 2.4 Comment le navigateur géré SWR
 
 Quand le navigateur recoit `stale-while-revalidate` :
 
-1. Il stocke la reponse avec son `max-age`
-2. Apres expiration du `max-age`, si dans la fenetre SWR :
+1. Il stocke la réponse avec son `max-age`
+2. Après expiration du `max-age`, si dans la fenêtre SWR :
    - Il retourne immediatement la version en cache
-   - Il lance une requete `fetch` en arriere-plan
-   - La reponse fraiche remplace l'ancienne dans le cache
-3. La prochaine requete obtiendra la version fraichement revalidee
+   - Il lance une requête `fetch` en arriere-plan
+   - La réponse fraiche remplace l'ancienne dans le cache
+3. La prochaine requête obtiendra la version fraichement revalidee
 
 ```js
 // Ce que fait le navigateur "sous le capot" (pseudo-code)
@@ -168,7 +168,7 @@ async function revalidateInBackground(request) {
 
 ## 3. stale-if-error : fallback si origin down
 
-### 3.1 Le probleme
+### 3.1 Le problème
 
 Que se passe-t-il si l'origin server est en panne et que le cache a expire ?
 
@@ -387,7 +387,7 @@ Client -----> Reseau -----> Reponse (ou erreur)
                 X (jamais de cache)
 ```
 
-**Quand l'utiliser** : operations d'ecriture (POST, PUT, DELETE), authentification, donnees temps-reel.
+**Quand l'utiliser** : operations d'écriture (POST, PUT, DELETE), authentification, donnees temps-réel.
 
 ```js
 async function networkOnly(fetchFn, key) {
@@ -477,7 +477,7 @@ La ressource change-t-elle ?
 
 ---
 
-## 6. Exemple complet : serveur multi-strategie
+## 6. Exemple complet : serveur multi-stratégie
 
 ```js
 import { createServer } from 'node:http';
@@ -643,16 +643,16 @@ server.listen(3000, () => {
 
 ---
 
-## Points cles
+## Points clés
 
 1. **`stale-while-revalidate`** permet de servir du contenu expire immediatement tout en le rafraichissant en arriere-plan -- le meilleur des deux mondes.
-2. **`stale-if-error`** est votre filet de securite : mieux vaut des donnees de 5 minutes que pas de donnees du tout.
-3. **Cache-Only** et **Network-Only** sont les deux extremes : l'un ignore le reseau, l'autre ignore le cache.
+2. **`stale-if-error`** est votre filet de sécurité : mieux vaut des donnees de 5 minutes que pas de donnees du tout.
+3. **Cache-Only** et **Network-Only** sont les deux extremes : l'un ignore le réseau, l'autre ignore le cache.
 4. **Cache-First** est ideal pour les ressources statiques versionnees (fichiers avec hash).
 5. **Network-First** garantit la fraicheur avec un fallback offline gracieux.
 6. **SWR** offre le meilleur compromis vitesse/fraicheur pour les donnees semi-dynamiques.
-7. La fenetre SWR commence **apres** l'expiration du `max-age`, pas a partir du stockage.
-8. Combiner `stale-while-revalidate` et `stale-if-error` dans le meme header est non seulement valide mais **fortement recommande** pour la resilience.
+7. La fenêtre SWR commence **après** l'expiration du `max-age`, pas à partir du stockage.
+8. Combiner `stale-while-revalidate` et `stale-if-error` dans le même header est non seulement valide mais **fortement recommande** pour la résilience.
 
 ---
 
@@ -667,21 +667,21 @@ server.listen(3000, () => {
 - [RFC 5861 - HTTP Cache-Control Extensions for Stale Content](https://datatracker.ietf.org/doc/html/rfc5861)
 - [web.dev - Keeping things fresh with stale-while-revalidate](https://web.dev/stale-while-revalidate/)
 - [Google Developers - The Offline Cookbook](https://web.dev/offline-cookbook/)
-- [Workbox Strategies](https://developer.chrome.com/docs/workbox/modules/workbox-strategies/)
+- [Workbox Stratégies](https://developer.chrome.com/docs/workbox/modules/workbox-strategies/)
 
 ---
 
 ## Si tu es perdu
 
-Pense a un distributeur automatique de cafe :
+Pense à un distributeur automatique de cafe :
 
-- **Cache-Only** : tu ne bois que le cafe deja dans ta tasse. Pas de machine.
+- **Cache-Only** : tu ne bois que le cafe déjà dans ta tasse. Pas de machine.
 - **Cache-First** : tu regardes d'abord si tu as du cafe dans ta tasse. Sinon, tu en refais.
-- **Network-First** : tu refais toujours un cafe frais. Si la machine est en panne, tu bois celui de ta tasse (meme froid).
+- **Network-First** : tu refais toujours un cafe frais. Si la machine est en panne, tu bois celui de ta tasse (même froid).
 - **Network-Only** : tu refais toujours un cafe frais. Machine en panne = pas de cafe.
-- **SWR** : tu bois le cafe de ta tasse (meme tiede) et tu lances la machine pour en avoir un frais pour la prochaine fois.
+- **SWR** : tu bois le cafe de ta tasse (même tiede) et tu lances la machine pour en avoir un frais pour la prochaine fois.
 
-Le `stale-while-revalidate` c'est juste : "donne-moi ce que tu as maintenant, et prepare du frais pour la prochaine fois". C'est aussi simple que ca.
+Le `stale-while-revalidate` c'est juste : "donne-moi ce que tu as maintenant, et prepare du frais pour la prochaine fois". C'est aussi simple que ça.
 
 ---
 
@@ -715,3 +715,15 @@ Ecris les headers `Cache-Control` optimaux pour chacun de ces cas :
 5. Cache-Control: max-age=3600, stale-while-revalidate=86400
    --> 1h frais, puis SWR pendant 24h (change rarement)
 ```
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 06 swr](../screencasts/screencast-06-swr.md)
+2. **Lab** : [lab-05-swr-implementation](../labs/lab-05-swr-implementation/README)
+3. **Visualisation** : [Cache Decision Tree](../visualizations/cache-decision-tree.html)
+4. **Visualisation** : [Stale-While-Revalidate](../visualizations/stale-while-revalidate.html)
+5. **Quiz** : [quiz 06 swr](../quizzes/quiz-06-swr.html)
+:::

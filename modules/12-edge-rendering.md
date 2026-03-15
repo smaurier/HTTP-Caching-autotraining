@@ -866,10 +866,6 @@ server.listen(3000, () => console.log('Edge Headers → http://localhost:3000'))
 
 ---
 
-## Lab associé
-
-→ `labs/12-edge-rendering/` — Construire un simulateur multi-edge avec geo-routing, cache-keys composites, A/B testing persistant, et mesurer la différence de TTFB entre edge cache HIT et origin fetch.
-
 ---
 
 ## Pour aller plus loin
@@ -1117,3 +1113,13 @@ export default async function Dashboard() {
 | **Taille max** | Illimitée | ~4 MB (Vercel), ~1 MB (Cloudflare) |
 | **Base de données** | Toutes (SQL, NoSQL, ORM) | HTTP-only (REST, GraphQL, edge-compatible DBs) |
 | **Cas d'usage** | API complexes, rendering lourd | Routing, auth, A/B testing, personnalisation |
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 12 edge rendering](../screencasts/screencast-12-edge-rendering.md)
+2. **Lab** : [lab-12-edge-middleware](../labs/lab-12-edge-middleware/README)
+3. **Quiz** : [quiz 12 edge](../quizzes/quiz-12-edge.html)
+:::

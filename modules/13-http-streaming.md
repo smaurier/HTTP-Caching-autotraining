@@ -1055,10 +1055,6 @@ server.listen(3000, () => {
 
 ---
 
-## Lab associé
-
-→ `labs/13-http-streaming/` — Construire un serveur de streaming SSR complet avec out-of-order streaming, comparer les TTFB entre rendu buffered et streaming, implémenter un endpoint SSE avec reconnexion.
-
 ---
 
 ## Pour aller plus loin
@@ -1242,3 +1238,13 @@ server.listen(3000, () => {
 ```
 
 </details>
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 13 http streaming](../screencasts/screencast-13-http-streaming.md)
+2. **Lab** : [lab-13-streaming-responses](../labs/lab-13-streaming-responses/README)
+3. **Quiz** : [quiz 13 streaming](../quizzes/quiz-13-streaming.html)
+:::

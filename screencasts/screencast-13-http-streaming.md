@@ -167,11 +167,11 @@ curl -I http://localhost:3000/streaming
 
 > Le TTFB (Time To First Byte) passe de 2 secondes à 50 millisecondes. Le FCP (First Contentful Paint) aussi. L'utilisateur voit quelque chose 40 fois plus vite.
 
-> Cas moins pertinent : pages rapides où tout est disponible en même temps. Si votre page SSR se génère en 50ms au total, le streaming n'apporte pas grand-chose en termes d'UX. Il ajoute juste de la complexité.
+> Cas moins pertinent : pages rapides ou tout est disponible en même temps. Si votre page SSR se génère en 50ms au total, le streaming n'apporte pas grand-chose en termes d'UX. Il ajoute juste de la complexité.
 
 **Action** : Montrer les métriques dans l'onglet Performance des DevTools.
 
-> Dans l'onglet Performance des DevTools, on voit clairement la différence. Le SSR classique a un long Time To First Byte. Le streaming a un TTFB très court et un chargement progressif.
+> Dans l'onglet Performance des DevTools, on voit clairement la différence. Le SSR classique à un long Time To First Byte. Le streaming à un TTFB très court et un chargement progressif.
 
 ### [12:30-14:00] Le futur — Partial Prerendering
 

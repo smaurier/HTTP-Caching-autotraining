@@ -98,7 +98,7 @@ curl -I http://localhost:3000/api/news
 
 ### [10:00-12:00] stale-if-error — La résilience
 
-> Il y a une directive complémentaire à connaître : `stale-if-error`.
+> Il y à une directive complémentaire à connaître : `stale-if-error`.
 
 ```bash
 curl -I http://localhost:3000/api/resilient

@@ -24,7 +24,7 @@
 
 ### [01:30-04:30] Les directives de base — public, private, no-store
 
-> Commençons par les directives fondamentales. Il y en a trois qui contrôlent où la réponse peut être cachée.
+> Commençons par les directives fondamentales. Il y en a trois qui contrôlent ou la réponse peut être cachée.
 
 **Action** : Lancer le serveur du lab et ouvrir le fichier exercice dans l'éditeur.
 
@@ -129,7 +129,7 @@ curl -I http://localhost:3000/articles
 # Cache-Control: public, max-age=60, stale-while-revalidate=300
 ```
 
-> "Sers la version en cache même si elle est périmée depuis max 300 secondes, mais lance une revalidation en background." L'utilisateur a une réponse instantanée, et le cache se met à jour silencieusement.
+> "Sers la version en cache même si elle est périmée depuis max 300 secondes, mais lance une revalidation en background." L'utilisateur à une réponse instantanée, et le cache se met à jour silencieusement.
 
 ### [12:00-13:00] Combinaisons courantes — Les recettes du quotidien
 
@@ -143,7 +143,7 @@ curl -I http://localhost:3000/articles
 
 ### [13:00-14:30] Récap — Maîtriser Cache-Control
 
-> Résumons. `public` vs `private` contrôle où le cache est autorisé. `max-age` et `s-maxage` contrôlent la durée. `no-cache` force la revalidation. `no-store` interdit tout cache. `immutable` évite les revalidations inutiles. Et `stale-while-revalidate` offre le meilleur des deux mondes.
+> Résumons. `public` vs `private` contrôle ou le cache est autorisé. `max-age` et `s-maxage` contrôlent la durée. `no-cache` force la revalidation. `no-store` interdit tout cache. `immutable` évite les revalidations inutiles. Et `stale-while-revalidate` offre le meilleur des deux mondes.
 
 **Action** : Mentionner le quiz et le lab associé.
 

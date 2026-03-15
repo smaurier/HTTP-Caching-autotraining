@@ -1,4 +1,4 @@
-# Screencast 11 — ISR et SSG : génération statique et revalidation à la demande
+# Screencast 11 — ISR et SSG : génération statique et revalidation à la demandé
 
 ## Informations
 - **Durée estimée** : 13-15 min
@@ -16,11 +16,11 @@
 
 ### [00:00-01:30] Introduction — Le meilleur du statique et du dynamique
 
-> Salut ! Dans le screencast précédent, on a construit du SSR from scratch. Le SSR, c'est génial pour le premier affichage, mais ça a un coût : chaque requête génère le HTML sur le serveur. Et si on pouvait pré-générer les pages à l'avance, comme un site statique, mais garder la capacité de les mettre à jour ? C'est exactement ce que font SSG et ISR.
+> Salut ! Dans le screencast précédent, on a construit du SSR from scratch. Le SSR, c'est génial pour le premier affichage, mais ça à un coût : chaque requête génère le HTML sur le serveur. Et si on pouvait pré-générer les pages à l'avance, comme un site statique, mais garder la capacité de les mettre à jour ? C'est exactement ce que font SSG et ISR.
 
 **Action** : Afficher le slide "Module 11 — ISR et SSG".
 
-> SSG, Static Site Generation, c'est la génération des pages au moment du build. Elles deviennent des fichiers HTML statiques, servis ultra-rapidement par n'importe quel CDN. ISR, Incremental Static Regeneration, c'est l'évolution : les pages sont regénérées à la demande, sans rebuild complet. C'est le pattern popularisé par Next.js, et on va le voir en action.
+> SSG, Static Site Génération, c'est la génération des pages au moment du build. Elles deviennent des fichiers HTML statiques, servis ultra-rapidement par n'importe quel CDN. ISR, Incremental Static Regeneration, c'est l'évolution : les pages sont regénérées à la demandé, sans rebuild complet. C'est le pattern popularisé par Next.js, et on va le voir en action.
 
 ### [01:30-04:00] SSG — La génération au build time
 
@@ -91,7 +91,7 @@ export async function getStaticProps({ params }) {
 }
 ```
 
-> `revalidate: 60` signifie : cette page est valide 60 secondes. Après 60 secondes, si quelqu'un la demande, la page actuelle est servie (stale), et en arrière-plan, Next.js la regénère avec les données fraîches. La prochaine requête reçoit la version à jour.
+> `revalidate: 60` signifie : cette page est valide 60 secondes. Après 60 secondes, si quelqu'un la demandé, la page actuelle est servie (stale), et en arrière-plan, Next.js la regénère avec les données fraîches. La prochaine requête reçoit la version à jour.
 
 **Action** : Lancer le serveur en mode production et démontrer ISR.
 
@@ -116,7 +116,7 @@ curl -X PUT -H "Content-Type: application/json" \
 
 ### [07:30-10:00] On-Demand Revalidation — La purge manuelle
 
-> ISR avec un timer, c'est bien. Mais parfois, on veut mettre à jour immédiatement. C'est la revalidation à la demande.
+> ISR avec un timer, c'est bien. Mais parfois, on veut mettre à jour immédiatement. C'est la revalidation à la demandé.
 
 **Action** : Montrer l'API route de revalidation.
 
@@ -155,9 +155,9 @@ curl "http://localhost:3000/api/revalidate?secret=mon-secret&path=/articles/1"
 
 > Et voilà : la page est immédiatement à jour. En production, vous brancheriez ça sur un webhook de votre CMS ou de votre back-office. A chaque modification de contenu, le CMS appelle l'API de revalidation, et la page est regénérée en quelques secondes.
 
-### [10:00-12:30] Fallback et pages à la demande
+### [10:00-12:30] Fallback et pages à la demandé
 
-> Un autre aspect puissant d'ISR : le fallback. Que se passe-t-il quand quelqu'un demande une page qui n'a pas été générée au build ?
+> Un autre aspect puissant d'ISR : le fallback. Que se passe-t-il quand quelqu'un demandé une page qui n'a pas été générée au build ?
 
 ```javascript
 export async function getStaticPaths() {
@@ -170,11 +170,11 @@ export async function getStaticPaths() {
 }
 ```
 
-> Avec `fallback: 'blocking'`, quand quelqu'un demande un article qui n'est pas pré-généré, Next.js le génère à la volée côté serveur, le met en cache, et le sert. Les requêtes suivantes sont servies depuis le cache. C'est de la génération incrémentale au sens propre.
+> Avec `fallback: 'blocking'`, quand quelqu'un demandé un article qui n'est pas pré-généré, Next.js le génère à la volée côté serveur, le met en cache, et le sert. Les requêtes suivantes sont servies depuis le cache. C'est de la génération incrémentale au sens propre.
 
-**Action** : Accéder à un article non pré-généré et montrer la génération à la demande.
+**Action** : Accéder à un article non pré-généré et montrer la génération à la demandé.
 
-> Ça permet de gérer des sites avec des millions de pages. On pré-génère les 1000 pages les plus populaires, et le reste est généré à la demande. Le CDN absorbe les requêtes suivantes. C'est le meilleur des deux mondes.
+> Ça permet de gérer des sites avec des millions de pages. On pré-génère les 1000 pages les plus populaires, et le reste est généré à la demandé. Le CDN absorbe les requêtes suivantes. C'est le meilleur des deux mondes.
 
 > En termes de cache HTTP, les pages ISR sont typiquement servies avec :
 
@@ -201,7 +201,7 @@ curl -I http://localhost:3000/articles/1
 
 ### [14:00-14:30] Récap — ISR, le cache du futur
 
-> Résumons. SSG génère tout au build, ISR régénère à la demande. ISR utilise le même pattern que stale-while-revalidate. La revalidation on-demand permet des mises à jour immédiates. Et le fallback permet de gérer des sites à millions de pages.
+> Résumons. SSG génère tout au build, ISR régénère à la demandé. ISR utilise le même pattern que stale-while-revalidate. La revalidation on-demand permet des mises à jour immédiates. Et le fallback permet de gérer des sites à millions de pages.
 
 **Action** : Mentionner le quiz et le lab.
 

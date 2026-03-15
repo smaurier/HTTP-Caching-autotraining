@@ -31,7 +31,7 @@ screencasts/ → 16 scripts de screencast (Markdown)
 | 03 | Les en-têtes HTTP | Cache-Control Lab | Headers |
 | 04 | Cache-Control — Le chef d'orchestre | ETag Conditional | Cache |
 | 05 | ETag & Validation conditionnelle | SWR Implementation | Cache |
-| 06 | Stale-While-Revalidate & stratégies | Cache Strategies | Cache |
+| 06 | Stale-While-Revalidate & stratégies | Cache Stratégies | Cache |
 | 07 | Cache navigateur | Mini CDN | Browser |
 | 08 | CDN | Reverse Proxy Cache | Infra |
 | 09 | Cache multi-couches | Multi-Layer Cache | Infra |

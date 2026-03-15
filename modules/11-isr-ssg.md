@@ -5,13 +5,13 @@
 
 ---
 
-## 1. SSG — Static Site Generation
+## 1. SSG — Static Site Génération
 
 ### 1.1 Le principe fondamental
 
-Le SSG (Static Site Generation) consiste à **générer toutes les pages HTML au moment du build**, avant même qu'un utilisateur ne visite le site. Le serveur ne fait que servir des fichiers statiques — exactement comme un serveur de fichiers classique.
+Le SSG (Static Site Génération) consiste à **générer toutes les pages HTML au moment du build**, avant même qu'un utilisateur ne visite le site. Le serveur ne fait que servir des fichiers statiques — exactement comme un serveur de fichiers classique.
 
-**Analogie** : Imagine une imprimerie. Au lieu d'écrire chaque lettre à la main quand quelqu'un la demande (SSR), tu imprimes **toutes les lettres d'avance** et tu les ranges dans des casiers. Quand quelqu'un en veut une, tu la sors du casier instantanément.
+**Analogie** : Imagine une imprimerie. Au lieu d'écrire chaque lettre à la main quand quelqu'un la demandé (SSR), tu imprimes **toutes les lettres d'avance** et tu les ranges dans des casiers. Quand quelqu'un en veut une, tu la sors du casier instantanément.
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -346,7 +346,7 @@ server.listen(3000, () => {
 
 ### 2.3 On-Demand Revalidation
 
-Parfois, tu ne veux pas attendre l'expiration du TTL. Par exemple, quand un éditeur publie un article dans le CMS, tu veux que la page soit régénérée **immédiatement**. C'est la **revalidation à la demande** (on-demand revalidation).
+Parfois, tu ne veux pas attendre l'expiration du TTL. Par exemple, quand un éditeur publie un article dans le CMS, tu veux que la page soit régénérée **immédiatement**. C'est la **revalidation à la demandé** (on-demand revalidation).
 
 ```js
 // on-demand-revalidation.mjs — Webhook de revalidation
@@ -774,10 +774,6 @@ server.listen(3000, () => {
 
 ---
 
-## Lab associé
-
-→ `labs/11-isr-ssg/` — Construire un mini-framework ISR avec cache en mémoire, TTL configurable, endpoint de revalidation on-demand, et observer les en-têtes X-Cache-Status.
-
 ---
 
 ## Pour aller plus loin
@@ -794,10 +790,10 @@ server.listen(3000, () => {
 Pense à un **journal quotidien** :
 
 - **SSG** = tu imprimes le journal **une fois le matin** et tu distribues les mêmes exemplaires toute la journée. Rapide, pas cher, mais les nouvelles de l'après-midi ne sont pas dedans.
-- **SSR** = tu **réécris le journal à chaque fois** que quelqu'un le demande. Toujours à jour, mais ça coûte cher et c'est lent.
+- **SSR** = tu **réécris le journal à chaque fois** que quelqu'un le demandé. Toujours à jour, mais ça coûte cher et c'est lent.
 - **ISR** = tu imprimes le journal le matin, mais **toutes les heures**, un journaliste vérifie s'il y a des changements importants. Si oui, il imprime une **édition mise à jour**. Les gens qui arrivent entre deux éditions reçoivent la dernière version imprimée — pas parfaitement à jour, mais bien assez.
 
-La **revalidation on-demand**, c'est quand le rédacteur en chef appelle directement l'imprimerie pour dire : « Imprime une édition spéciale MAINTENANT, il y a un scoop ! »
+La **revalidation on-demand**, c'est quand le rédacteur en chef appelle directement l'imprimerie pour dire : « Imprime une édition spéciale MAINTENANT, il y à un scoop ! »
 
 ---
 
@@ -1034,3 +1030,14 @@ const product = await fetch(`https://api.example.com/products/${id}`, {
 | `revalidate = 3600` | ISR (re-générer toutes les heures) | `Cache-Control: s-maxage=3600, stale-while-revalidate` |
 | `revalidatePath('/blog')` | On-demand revalidation | Purge CDN par URL |
 | `revalidateTag('posts')` | Revalidation par tag | Purge CDN par surrogate key |
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 11 isr ssg](../screencasts/screencast-11-isr-ssg.md)
+2. **Lab** : [lab-11-isr-implementation](../labs/lab-11-isr-implementation/README)
+3. **Visualisation** : [SSR & Hydration](../visualizations/ssr-hydration.html)
+4. **Quiz** : [quiz 11 isr](../quizzes/quiz-11-isr.html)
+:::

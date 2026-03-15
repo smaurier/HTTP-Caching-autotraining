@@ -1,7 +1,7 @@
 # Module 03 — Les en-tetes HTTP
 
-> **Objectif** : Maitriser les en-tetes HTTP essentiels, comprendre la negociation de contenu, les headers CORS, et surtout l'impact critique de `Vary` sur le caching.
-> **Difficulte** : ⭐⭐ (Intermediaire)
+> **Objectif** : Maîtriser les en-tetes HTTP essentiels, comprendre la negociation de contenu, les headers CORS, et surtout l'impact critique de `Vary` sur le caching.
+> **Difficulte** : ⭐⭐ (Intermédiaire)
 
 ---
 
@@ -42,9 +42,9 @@ Nom-Du-Header: valeur
 ```
 
 **Regles :**
-- Le nom est **insensible a la casse** (`Content-Type` = `content-type`)
+- Le nom est **insensible à la casse** (`Content-Type` = `content-type`)
 - La valeur peut contenir presque n'importe quoi
-- Un header peut apparaitre **plusieurs fois** (les valeurs sont alors concatenees avec des virgules)
+- Un header peut apparaître **plusieurs fois** (les valeurs sont alors concatenees avec des virgules)
 - En HTTP/2 et HTTP/3, les noms sont toujours en **minuscules**
 
 ```
@@ -101,7 +101,7 @@ Les en-tetes se repartissent en plusieurs categories :
 
 Le header `Content-Type` indique le **type MIME** du contenu.
 
-**Analogie** : C'est comme l'etiquette "Fragile - Verre" ou "Denrees perissables" sur un colis. Ca dit au destinataire comment traiter le contenu.
+**Analogie** : C'est comme l'etiquette "Fragile - Verre" ou "Denrees perissables" sur un colis. Ça dit au destinataire comment traiter le contenu.
 
 ```
 Content-Type: type/sous-type; parametre=valeur
@@ -116,7 +116,7 @@ Content-Type: type/sous-type; parametre=valeur
 | `text/javascript`                     | Code JavaScript                 |
 | `application/json`                    | Donnees JSON (API)              |
 | `application/xml`                     | Donnees XML                     |
-| `application/octet-stream`            | Fichier binaire generique       |
+| `application/octet-stream`            | Fichier binaire générique       |
 | `image/png`                           | Image PNG                       |
 | `image/jpeg`                          | Image JPEG                      |
 | `image/webp`                          | Image WebP                      |
@@ -177,7 +177,7 @@ const server = http.createServer((req: IncomingMessage, res: ServerResponse) => 
 server.listen(3000, () => console.log('http://localhost:3000'));
 ```
 
-**Pourquoi Content-Type est crucial ?** Si tu envoies du HTML avec `Content-Type: text/plain`, le navigateur affichera le code source au lieu de rendre la page. Un mauvais Content-Type peut aussi causer des failles de securite (MIME sniffing).
+**Pourquoi Content-Type est crucial ?** Si tu envoies du HTML avec `Content-Type: text/plain`, le navigateur affichera le code source au lieu de rendre la page. Un mauvais Content-Type peut aussi causer des failles de sécurité (MIME sniffing).
 
 ### 2.2 Content-Length : "Combien pese le colis ?"
 
@@ -187,7 +187,7 @@ Content-Length: 4521
 
 - Indique la taille **exacte** du body en octets
 - Permet au client de savoir quand il a tout recu
-- **Important pour le cache** : permet de verifier l'integrite du telechargement
+- **Important pour le cache** : permet de vérifier l'integrite du telechargement
 
 ```typescript
 // Attention : Content-Length doit etre en OCTETS, pas en caracteres
@@ -231,7 +231,7 @@ Gain : 75% de bande passante !
 | Brotli     | `Content-Encoding: br`          | 80-90%        | Moderne  |
 | zstd       | `Content-Encoding: zstd`        | 85-92%        | Emergent |
 
-**Brotli (br) est generalement meilleur que gzip** pour le texte web (HTML, CSS, JS, JSON).
+**Brotli (br) est généralement meilleur que gzip** pour le texte web (HTML, CSS, JS, JSON).
 
 ```typescript
 // server-compression.ts
@@ -322,7 +322,7 @@ curl -s -o /dev/null -w "Taille: %{size_download} octets\n" \
 
 ### 3.1 Le principe
 
-La negociation de contenu permet au client de dire au serveur **sous quelle forme** il souhaite la reponse. C'est comme commander un cafe : "Un cafe, s'il vous plait. De preference un expresso, sinon un allonge ira aussi."
+La negociation de contenu permet au client de dire au serveur **sous quelle forme** il souhaite la réponse. C'est comme commander un cafe : "Un cafe, s'il vous plait. De préférence un expresso, sinon un allonge ira aussi."
 
 ```
 CLIENT                                          SERVEUR
@@ -346,7 +346,7 @@ CLIENT                                          SERVEUR
   |  <-------------------------------------------  |
 ```
 
-### 3.2 Accept : "Quel format de reponse ?"
+### 3.2 Accept : "Quel format de réponse ?"
 
 ```
 Accept: application/json                          # Je veux du JSON
@@ -356,7 +356,7 @@ Accept: image/webp, image/png;q=0.8, image/*;q=0.5  # WebP > PNG > n'importe que
 Accept: */*                                       # N'importe quoi
 ```
 
-**Le parametre `q` (quality)** indique la preference de 0 a 1 :
+**Le paramètre `q` (quality)** indique la préférence de 0 a 1 :
 
 ```
 Accept: text/html;q=1.0, application/json;q=0.9, text/plain;q=0.5, */*;q=0.1
@@ -467,9 +467,9 @@ curl -H "Accept: application/json" -H "Accept-Language: en" http://localhost:300
 
 ## 4. Les headers CORS
 
-### 4.1 Le probleme des origines croisees
+### 4.1 Le problème des origines croisees
 
-**Analogie** : Imagine un immeuble securise. Chaque appartement (origine) a sa propre serrure. Tu ne peux pas entrer dans l'appartement du voisin (autre origine) sans sa permission explicite.
+**Analogie** : Imagine un immeuble sécurisé. Chaque appartement (origine) a sa propre serrure. Tu ne peux pas entrer dans l'appartement du voisin (autre origine) sans sa permission explicite.
 
 ```
 MEME ORIGINE (Same-Origin) :
@@ -503,9 +503,9 @@ Access-Control-Request-Headers:             Access-Control-Max-Age: 86400
 
 | Header CORS                          | Direction         | Description                                    |
 |--------------------------------------|-------------------|------------------------------------------------|
-| `Origin`                             | Requete           | L'origine de la page qui fait la requete       |
-| `Access-Control-Allow-Origin`        | Reponse           | Origines autorisees (`*` ou une URL specifique)|
-| `Access-Control-Allow-Methods`       | Reponse           | Methodes HTTP autorisees                       |
+| `Origin`                             | Requête           | L'origine de la page qui fait la requête       |
+| `Access-Control-Allow-Origin`        | Reponse           | Origines autorisees (`*` ou une URL spécifique)|
+| `Access-Control-Allow-Methods`       | Reponse           | Méthodes HTTP autorisees                       |
 | `Access-Control-Allow-Headers`       | Reponse           | Headers personnalises autorises                |
 | `Access-Control-Max-Age`             | Reponse           | Duree de cache du preflight (en secondes)      |
 | `Access-Control-Allow-Credentials`   | Reponse           | Autoriser les cookies cross-origin             |
@@ -513,7 +513,7 @@ Access-Control-Request-Headers:             Access-Control-Max-Age: 86400
 
 ### 4.3 Impact de CORS sur le cache
 
-**`Access-Control-Max-Age`** est un header de cache specifique aux preflight :
+**`Access-Control-Max-Age`** est un header de cache spécifique aux preflight :
 
 ```
 Access-Control-Max-Age: 86400    # Cacher le preflight pendant 24h
@@ -578,11 +578,11 @@ server.listen(3000, () => console.log('API CORS sur http://localhost:3000'));
 
 ## 5. Transfer-Encoding: chunked
 
-### 5.1 Le probleme : reponses de taille inconnue
+### 5.1 Le problème : réponses de taille inconnue
 
-Parfois, le serveur ne connait pas a l'avance la taille de la reponse. Par exemple, quand il genere du contenu dynamiquement ou streame des donnees.
+Parfois, le serveur ne connait pas a l'avance la taille de la réponse. Par exemple, quand il généré du contenu dynamiquement ou streame des donnees.
 
-**Analogie** : Au lieu d'envoyer un gros colis, tu envoies une serie de petits paquets numerotes. Le destinataire sait que c'est fini quand il recoit un paquet vide.
+**Analogie** : Au lieu d'envoyer un gros colis, tu envoies une serie de petits paquets numérotés. Le destinataire sait que c'est fini quand il recoit un paquet vide.
 
 ```
 REPONSE CLASSIQUE (Content-Length connu)
@@ -683,15 +683,15 @@ curl -N http://localhost:3000/stream
 curl -N http://localhost:3000/sse
 ```
 
-**Pourquoi Transfer-Encoding est important pour le cache ?** Une reponse chunked **sans Content-Length** est plus difficile a cacher car le cache ne sait pas quelle taille allouer. De plus, les reponses streamees (SSE) ne sont generalement **jamais cachees**.
+**Pourquoi Transfer-Encoding est important pour le cache ?** Une réponse chunked **sans Content-Length** est plus difficile a cacher car le cache ne sait pas quelle taille allouer. De plus, les réponses streamees (SSE) ne sont généralement **jamais cachees**.
 
 ---
 
 ## 6. Vary — L'en-tete le plus important pour le cache
 
-### 6.1 Le probleme sans Vary
+### 6.1 Le problème sans Vary
 
-**Analogie** : Imagine un bureau de poste qui garde une copie de chaque lettre qu'il distribue. Un client francophone demande la lettre #42 et recoit la version francaise. Le bureau garde cette copie. Ensuite, un client anglophone demande aussi la lettre #42. Le bureau lui donne... la version francaise ! C'est un bug.
+**Analogie** : Imagine un bureau de poste qui garde une copie de chaque lettre qu'il distribue. Un client francophone demandé la lettre #42 et recoit la version francaise. Le bureau garde cette copie. Ensuite, un client anglophone demandé aussi la lettre #42. Le bureau lui donne... la version francaise ! C'est un bug.
 
 ```
 PROBLEME SANS VARY :
@@ -715,7 +715,7 @@ Requete 2 (vieux navigateur, sans compression) :
 
 ### 6.2 La solution : Vary
 
-Le header `Vary` dit au cache : **"Cette reponse depend de tel(s) header(s) de la requete. Stocke une version differente pour chaque combinaison."**
+Le header `Vary` dit au cache : **"Cette réponse depend de tel(s) header(s) de la requête. Stocke une version différente pour chaque combinaison."**
 
 ```
 AVEC VARY: Accept-Encoding
@@ -776,7 +776,7 @@ Vary: *                                           # NE JAMAIS CACHER (chaque req
 
 1. **Sans Vary** sur un serveur qui fait de la negociation de contenu, les clients recevront potentiellement la **mauvaise version** depuis le cache.
 2. **Trop de Vary** (ex: `Vary: User-Agent`) explose le nombre de versions en cache, rendant le cache inefficace.
-3. **Vary: Cookie** est particulierement problematique car chaque utilisateur a des cookies differents, ce qui rend le cache pratiquement inutile pour les caches partages (CDN, proxy).
+3. **Vary: Cookie** est particulierement problematique car chaque utilisateur a des cookies différents, ce qui rend le cache pratiquement inutile pour les caches partages (CDN, proxy).
 
 ### 6.4 Les pieges de Vary
 
@@ -879,36 +879,36 @@ server.listen(3000, () => {
 
 ---
 
-## 7. Tableau recapitulatif des headers essentiels
+## 7. Tableau récapitulatif des headers essentiels
 
 | Header                         | Direction | Lien avec le cache                                    |
 |--------------------------------|-----------|-------------------------------------------------------|
 | `Cache-Control`                | Les deux  | Controle principal du cache (Module 04)               |
 | `ETag`                         | Reponse   | Identifiant de version pour revalidation (Module 05)  |
-| `Last-Modified`                | Reponse   | Date de derniere modification (Module 05)             |
-| `If-None-Match`                | Requete   | Revalidation avec ETag (Module 05)                    |
-| `If-Modified-Since`            | Requete   | Revalidation avec date (Module 05)                    |
-| `Expires`                      | Reponse   | Date d'expiration (ancien, preferer Cache-Control)    |
-| `Vary`                         | Reponse   | Definit la cle de cache (CRITIQUE)                    |
+| `Last-Modified`                | Reponse   | Date de dernière modification (Module 05)             |
+| `If-None-Match`                | Requête   | Revalidation avec ETag (Module 05)                    |
+| `If-Modified-Since`            | Requête   | Revalidation avec date (Module 05)                    |
+| `Expires`                      | Reponse   | Date d'expiration (ancien, préférer Cache-Control)    |
+| `Vary`                         | Reponse   | Definit la clé de cache (CRITIQUE)                    |
 | `Content-Encoding`             | Reponse   | Compression (impacte Vary)                            |
-| `Accept-Encoding`              | Requete   | Compression souhaitee (impacte Vary)                  |
+| `Accept-Encoding`              | Requête   | Compression souhaitee (impacte Vary)                  |
 | `Content-Type`                 | Les deux  | Type de contenu (le cache doit le preserver)          |
-| `Content-Length`               | Les deux  | Taille du body (verification d'integrite)             |
+| `Content-Length`               | Les deux  | Taille du body (vérification d'integrite)             |
 | `Transfer-Encoding`            | Reponse   | Chunked = difficile a cacher                          |
 | `Access-Control-Max-Age`       | Reponse   | Cache du preflight CORS                               |
-| `Age`                          | Reponse   | Temps passe dans un cache intermediaire (en secondes) |
-| `Date`                         | Reponse   | Horodatage de la reponse originale                    |
+| `Age`                          | Reponse   | Temps passe dans un cache intermédiaire (en secondes) |
+| `Date`                         | Reponse   | Horodatage de la réponse originale                    |
 
 ---
 
-## Points cles
+## Points clés
 
 1. **Content-Type** identifie le format du contenu. Un mauvais Content-Type casse l'affichage.
-2. **Content-Encoding** (gzip, br) compresse le contenu. Brotli est generalement 15-20% meilleur que gzip.
-3. **La negociation de contenu** (Accept, Accept-Encoding, Accept-Language) permet au serveur d'adapter la reponse au client.
-4. **CORS** (Access-Control-*) controle les requetes cross-origin. `Access-Control-Max-Age` cache les preflights.
-5. **Vary est CRITIQUE** : il dit au cache de stocker des versions differentes selon les headers de la requete. Sans lui, le cache peut servir la mauvaise version.
-6. **`Vary: *`** rend une ressource non cachable. **`Vary: Cookie`** ou **`Vary: User-Agent`** rend le cache tres inefficace.
+2. **Content-Encoding** (gzip, br) compresse le contenu. Brotli est généralement 15-20% meilleur que gzip.
+3. **La negociation de contenu** (Accept, Accept-Encoding, Accept-Language) permet au serveur d'adapter la réponse au client.
+4. **CORS** (Access-Control-*) controle les requêtes cross-origin. `Access-Control-Max-Age` cache les preflights.
+5. **Vary est CRITIQUE** : il dit au cache de stocker des versions différentes selon les headers de la requête. Sans lui, le cache peut servir la mauvaise version.
+6. **`Vary: *`** rend une ressource non cachable. **`Vary: Cookie`** ou **`Vary: User-Agent`** rend le cache très inefficace.
 
 ---
 
@@ -933,8 +933,8 @@ server.listen(3000, () => {
 **Retiens juste trois choses :**
 
 1. **Content-Type** dit "c'est du JSON" ou "c'est du HTML". Content-Encoding dit "c'est compresse avec gzip".
-2. **Accept / Accept-Encoding / Accept-Language** : le client dit ce qu'il prefere, le serveur choisit la meilleure option.
-3. **Vary** : quand le serveur repond differemment selon un header de la requete (ex: langue ou compression), il DOIT ajouter `Vary: <ce-header>` sinon le cache risque de servir la mauvaise version a certains clients.
+2. **Accept / Accept-Encoding / Accept-Language** : le client dit ce qu'il préféré, le serveur choisit la meilleure option.
+3. **Vary** : quand le serveur repond differemment selon un header de la requête (ex: langue ou compression), il DOIT ajouter `Vary: <ce-header>` sinon le cache risque de servir la mauvaise version a certains clients.
 
 ---
 
@@ -942,26 +942,37 @@ server.listen(3000, () => {
 
 ### Le cache corrompu
 
-**Scenario** : Tu as un serveur qui repond en francais ou en anglais selon `Accept-Language`, et qui compresse en gzip ou Brotli selon `Accept-Encoding`. Un CDN (cache partage) est place devant le serveur.
+**Scenario** : Tu as un serveur qui repond en français ou en anglais selon `Accept-Language`, et qui compresse en gzip ou Brotli selon `Accept-Encoding`. Un CDN (cache partage) est place devant le serveur.
 
-**Probleme** : Un utilisateur francophone avec gzip fait la premiere requete. Le CDN cache la reponse. Ensuite, un utilisateur anglophone avec Brotli fait la meme requete. Que recoit-il ?
+**Problème** : Un utilisateur francophone avec gzip fait la première requête. Le CDN cache la réponse. Ensuite, un utilisateur anglophone avec Brotli fait la même requête. Que recoit-il ?
 
 **Questions :**
 
 1. Si le serveur n'a PAS de header Vary, que se passe-t-il ?
 2. Si le serveur a `Vary: Accept-Language` (mais pas Accept-Encoding), que se passe-t-il ?
 3. Quel header Vary faut-il pour que tout fonctionne correctement ?
-4. Combien de versions differentes le CDN stockera-t-il au maximum ?
+4. Combien de versions différentes le CDN stockera-t-il au maximum ?
 
 <details>
 <summary>Reponses</summary>
 
 1. **Sans Vary** : L'utilisateur anglophone recoit la version **francaise compressees en gzip** (la version cachee). C'est la mauvaise langue ET potentiellement le mauvais encodage.
 
-2. **Avec `Vary: Accept-Language` seulement** : Le CDN stocke une version par langue. L'utilisateur anglophone recoit bien la version anglaise, MAIS elle est compresseee en gzip meme si son navigateur preferait Brotli. Pire : si le premier visiteur anglophone n'avait PAS de compression, tous les anglophones recevront la version non compressee.
+2. **Avec `Vary: Accept-Language` seulement** : Le CDN stocke une version par langue. L'utilisateur anglophone recoit bien la version anglaise, MAIS elle est compresseee en gzip même si son navigateur preferait Brotli. Pire : si le premier visiteur anglophone n'avait PAS de compression, tous les anglophones recevront la version non compressee.
 
 3. **Il faut `Vary: Accept-Encoding, Accept-Language`** pour que le CDN distingue toutes les combinaisons.
 
-4. **Au maximum : 2 langues x 3 encodages (br, gzip, aucun) = 6 versions** differentes de la meme URL dans le cache du CDN. C'est gerable. Mais si tu ajoutais `Vary: User-Agent`, ce serait des milliers de versions (un par navigateur x langue x encodage).
+4. **Au maximum : 2 langues x 3 encodages (br, gzip, aucun) = 6 versions** différentes de la même URL dans le cache du CDN. C'est gerable. Mais si tu ajoutais `Vary: User-Agent`, ce serait des milliers de versions (un par navigateur x langue x encodage).
 
 </details>
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 03 en tetes http](../screencasts/screencast-03-en-tetes-http.md)
+2. **Lab** : [lab-03-cache-control-lab](../labs/lab-03-cache-control-lab/README)
+3. **Visualisation** : [Cache Decision Tree](../visualizations/cache-decision-tree.html)
+4. **Quiz** : [quiz 03 headers](../quizzes/quiz-03-headers.html)
+:::

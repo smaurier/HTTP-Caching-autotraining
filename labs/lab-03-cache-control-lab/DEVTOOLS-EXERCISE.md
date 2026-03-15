@@ -6,7 +6,7 @@ Observer le comportement réel du caching HTTP dans Chrome DevTools en utilisant
 
 ## Prérequis
 
-- Chrome (ou Edge/Brave basé sur Chromium)
+- Chrome (où Edge/Brave basé sur Chromium)
 - Node.js 20+
 - Lab 03 solution : `node labs/lab-03-cache-control-lab/solution.js`
 

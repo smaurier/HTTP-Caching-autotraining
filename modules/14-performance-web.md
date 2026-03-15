@@ -1058,10 +1058,6 @@ server.listen(3000, () => {
 
 ---
 
-## Lab associé
-
-→ `labs/14-performance-web/` — Construire un serveur qui expose les Server-Timing headers, mesurer l'impact du cache sur TTFB/LCP avec et sans cache, mettre en place un dashboard de performance budgets avec alertes.
-
 ---
 
 ## Pour aller plus loin
@@ -1086,7 +1082,7 @@ Pense à **commander un repas dans un restaurant** :
 
 - **CLS** = imagine que tu commences à manger et que quelqu'un **pousse ta table** au milieu du repas. C'est ce qui arrive quand une pub se charge et décale tout le contenu. Les polices en cache évitent le "flash" du changement de police.
 
-Le **waterfall**, c'est comme voir la **timeline de préparation en cuisine** : quel plat a été commandé quand, lequel bloque les autres, et où on peut gagner du temps.
+Le **waterfall**, c'est comme voir la **timeline de préparation en cuisine** : quel plat a été commandé quand, lequel bloque les autres, et ou on peut gagner du temps.
 
 ---
 
@@ -1252,3 +1248,13 @@ server.listen(3000, () => {
 ```
 
 </details>
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 14 performance web](../screencasts/screencast-14-performance-web.md)
+2. **Lab** : [lab-14-performance-audit](../labs/lab-14-performance-audit/README)
+3. **Quiz** : [quiz 14 performance](../quizzes/quiz-14-performance.html)
+:::

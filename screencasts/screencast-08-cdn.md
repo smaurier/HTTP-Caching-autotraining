@@ -79,7 +79,7 @@ app.get('*', async (req, res) => {
 });
 ```
 
-> Notre proxy fait exactement ce qu'un CDN fait : il intercepte la requête, vérifie son cache, et soit sert la réponse en cache (HIT), soit la demande au serveur d'origine (MISS). Et il ajoute un en-tête `X-Cache` pour indiquer si c'est un hit ou un miss.
+> Notre proxy fait exactement ce qu'un CDN fait : il intercepte la requête, vérifie son cache, et soit sert la réponse en cache (HIT), soit la demandé au serveur d'origine (MISS). Et il ajoute un en-tête `X-Cache` pour indiquer si c'est un hit ou un miss.
 
 ```bash
 # Première requête : cache MISS
@@ -142,7 +142,7 @@ curl -X PURGE https://example.com/api/articles -H "Fastly-Key: {token}"
 
 > Méthode 3 : cache busting par le nom de fichier. C'est ce qu'on fait avec les assets : `style.a1b2c3.css`. Quand le contenu change, le hash change, l'URL change, et le CDN sert automatiquement la nouvelle version. Pas besoin de purge.
 
-> Méthode 4 : les cache tags (ou surrogate keys). C'est une feature avancée de Fastly et Cloudflare. Vous taguez vos réponses, et vous pouvez purger par tag.
+> Méthode 4 : les cache tags (où surrogate keys). C'est une feature avancée de Fastly et Cloudflare. Vous taguez vos réponses, et vous pouvez purger par tag.
 
 ```bash
 # Réponse avec un tag

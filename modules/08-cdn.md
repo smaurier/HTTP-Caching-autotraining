@@ -1,6 +1,6 @@
 # Module 08 — CDN (Content Delivery Network)
 
-> **Objectif** : Comprendre l'architecture d'un CDN, les mecanismes de mise en cache edge, la hierarchie de cache et les strategies de purge utilisees par les principaux fournisseurs.
+> **Objectif** : Comprendre l'architecture d'un CDN, les mécanismes de mise en cache edge, la hiérarchie de cache et les stratégies de purge utilisees par les principaux fournisseurs.
 > **Difficulte** : :star::star::star:
 
 ---
@@ -9,7 +9,7 @@
 
 ### 1.1 Pourquoi un CDN ?
 
-Sans CDN, tous les utilisateurs du monde entier se connectent a un seul serveur :
+Sans CDN, tous les utilisateurs du monde entier se connectent à un seul serveur :
 
 ```
 SANS CDN :
@@ -33,21 +33,21 @@ AVEC CDN :
   Utilisateur Sydney ---5ms----> [POP Sydney] ------+
 ```
 
-### 1.2 Vocabulaire cle
+### 1.2 Vocabulaire clé
 
 | Terme | Definition |
 |-------|-----------|
 | **POP** | Point of Presence -- un datacenter du CDN dans une region |
 | **Edge Server** | Serveur dans un POP qui cache et sert le contenu |
 | **Origin Server** | Ton serveur d'origine, la source de verite |
-| **Shield** | Serveur intermediaire qui protege l'origin |
-| **Hit Ratio** | % de requetes servies par le cache (objectif : > 90%) |
+| **Shield** | Serveur intermédiaire qui protege l'origin |
+| **Hit Ratio** | % de requêtes servies par le cache (objectif : > 90%) |
 | **TTL** | Time To Live -- duree de vie d'un contenu en cache |
 | **Purge** | Suppression forcee d'un contenu du cache |
 
 ### 1.3 L'analogie de la franchise de restaurants
 
-- **Origin** = la cuisine centrale qui cree les recettes
+- **Origin** = la cuisine centrale qui créé les recettes
 - **Shield** = l'entrepot regional qui stocke les ingredients
 - **POP/Edge** = chaque restaurant local qui sert les clients
 - **Purge** = rappeler un plat dans tous les restaurants (ex: alerte sanitaire)
@@ -86,7 +86,7 @@ Cache-Control: no-cache
 
 Ce pattern permet de dire :
 - **CDN** : cache pendant 24h (`Surrogate-Control`)
-- **Navigateur** : revalide a chaque requete (`Cache-Control: no-cache`)
+- **Navigateur** : revalide à chaque requête (`Cache-Control: no-cache`)
 - Le CDN **supprime** le header `Surrogate-Control` avant de transmettre au client
 
 ### 2.3 CDN-Cache-Control (Moderne, standardise)
@@ -102,7 +102,7 @@ Cache-Control: max-age=60
 - Le navigateur utilise `Cache-Control` (60s)
 - Le CDN **supprime** `CDN-Cache-Control` avant de transmettre
 
-### 2.4 Hierarchie des headers selon les CDN
+### 2.4 Hiérarchie des headers selon les CDN
 
 | Header | Cloudflare | Fastly | Akamai | Standard |
 |--------|-----------|--------|--------|----------|
@@ -176,9 +176,9 @@ server.listen(4000, () => {
 
 ## 3. Cache hierarchy : L1 Edge, L2 Shield, Origin
 
-### 3.1 Le probleme du "thundering herd"
+### 3.1 Le problème du "thundering herd"
 
-Sans hierarchie, quand un contenu expire dans un POP, CHAQUE POP va chercher a l'origin :
+Sans hiérarchie, quand un contenu expire dans un POP, CHAQUE POP va chercher a l'origin :
 
 ```
 SANS Shield (mauvais) :
@@ -221,7 +221,7 @@ Chaque niveau reduit la charge sur le suivant.
 
 ### 3.4 Request collapsing / coalescing
 
-Quand plusieurs requetes identiques arrivent simultanement a un POP, le CDN n'envoie **qu'une seule** requete vers le shield/origin :
+Quand plusieurs requêtes identiques arrivent simultanement à un POP, le CDN n'envoie **qu'une seule** requête vers le shield/origin :
 
 ```
 Request Collapsing :
@@ -235,7 +235,7 @@ Request Collapsing :
                       +--> Reponse dupliquee a tous les 4 clients
 ```
 
-### 3.5 Simuler une hierarchie de cache
+### 3.5 Simuler une hiérarchie de cache
 
 ```js
 import { createServer, request as httpRequest } from 'node:http';
@@ -346,16 +346,16 @@ server.listen(3000, () => {
 
 ---
 
-## 4. Purging : strategies de purge
+## 4. Purging : stratégies de purge
 
 ### 4.1 Pourquoi purger ?
 
-Le cache a un TTL, mais parfois on veut invalider **immediatement** :
+Le cache à un TTL, mais parfois on veut invalider **immediatement** :
 
 - Correction d'une erreur sur le site
 - Mise a jour de prix
 - Contenu supprime pour raisons legales
-- Deploiement d'une nouvelle version
+- Déploiement d'une nouvelle version
 
 ### 4.2 Les 3 types de purge
 
@@ -386,12 +386,12 @@ curl -X POST "https://edgegrid.akamai.com/ccu/v3/invalidate/url/production" \
   -d '{"objects":["https://example.com/style.css"]}'
 ```
 
-**Avantage** : simple et precis.
-**Inconvenient** : si tu as 10 000 URLs a purger, ca prend du temps.
+**Avantage** : simple et précis.
+**Inconvenient** : si tu as 10 000 URLs a purger, ça prend du temps.
 
 ### 4.4 Purge par tag (Surrogate Keys)
 
-C'est la methode la plus puissante. L'origin envoie des tags avec chaque reponse :
+C'est la méthode la plus puissante. L'origin envoie des tags avec chaque réponse :
 
 ```http
 HTTP/1.1 200 OK
@@ -638,22 +638,22 @@ server.listen(4000, () => {
 
 ---
 
-## Points cles
+## Points clés
 
 1. Un **CDN** distribue des copies du contenu dans des **POP** proches des utilisateurs, reduisant la latence.
 2. Les **edge servers** dans chaque POP servent le contenu en cache ; le **shield** protege l'origin des cache miss multiples.
 3. `s-maxage` controle le TTL du CDN independamment du navigateur ; `CDN-Cache-Control` est l'approche moderne standardisee.
-4. La **hierarchie L1/L2** (Edge/Shield) permet d'atteindre un hit ratio > 99% et protege l'origin du "thundering herd".
-5. Le **request collapsing** fusionne les requetes simultanees identiques en une seule requete upstream.
-6. La **purge par tag** (Surrogate Keys) est la methode la plus puissante : une seule commande invalide toutes les URLs liees.
+4. La **hiérarchie L1/L2** (Edge/Shield) permet d'atteindre un hit ratio > 99% et protege l'origin du "thundering herd".
+5. Le **request collapsing** fusionne les requêtes simultanees identiques en une seule requête upstream.
+6. La **purge par tag** (Surrogate Keys) est la méthode la plus puissante : une seule commande invalide toutes les URLs liees.
 7. Le **soft purge** marque le contenu comme stale au lieu de le supprimer, permettant le SWR.
-8. Toujours ajouter des **headers de debug** (`X-Cache`, `X-Cache-Hits`) pour diagnostiquer les problemes de cache en production.
+8. Toujours ajouter des **headers de debug** (`X-Cache`, `X-Cache-Hits`) pour diagnostiquer les problèmes de cache en production.
 
 ---
 
 ## Lab associe
 
-> Lab 08 — Construire un mini-CDN avec hierarchie L1/L2, request collapsing et purge par tag avec `node:http`
+> Lab 08 — Construire un mini-CDN avec hiérarchie L1/L2, request collapsing et purge par tag avec `node:http`
 
 ---
 
@@ -669,18 +669,18 @@ server.listen(4000, () => {
 
 ## Si tu es perdu
 
-Pense a une chaine de pizzerias :
+Pense à une chaine de pizzerias :
 
-- **L'origin**, c'est la cuisine centrale a Paris qui cree les recettes
+- **L'origin**, c'est la cuisine centrale a Paris qui créé les recettes
 - **Le shield**, c'est l'entrepot regional (un par grande zone) qui stocke les ingredients prepares
 - **Le POP/edge**, c'est le restaurant local pres de chez toi qui assemble et sert la pizza
 
 Quand tu commandes une Margherita :
-1. Le restaurant local regarde s'il en a une prete (edge cache HIT)
-2. Sinon, il demande a l'entrepot regional (shield HIT)
-3. En dernier recours, il demande a la cuisine centrale (origin)
+1. Le restaurant local regarde s'il en à une prete (edge cache HIT)
+2. Sinon, il demandé a l'entrepot regional (shield HIT)
+3. En dernier recours, il demandé à la cuisine centrale (origin)
 
-La **purge**, c'est quand la cuisine centrale dit : "La recette de la Margherita a change, jetez toutes les anciennes !". Par tag, on peut dire : "Tout ce qui contient de la mozzarella, jetez-le !" -- ca touche la Margherita, la 4 Fromages, etc.
+La **purge**, c'est quand la cuisine centrale dit : "La recette de la Margherita a change, jetez toutes les anciennes !". Par tag, on peut dire : "Tout ce qui contient de la mozzarella, jetez-le !" -- ça touche la Margherita, la 4 Fromages, etc.
 
 ---
 
@@ -692,14 +692,14 @@ Jusqu'ici, nous avons simule le comportement d'un CDN avec du code local. Il est
 
 ### Exercice 1 : Analyser les headers Cloudflare
 
-Cloudflare est l'un des CDN les plus repandus. Interrogeons une librairie JavaScript populaire hebergee sur leur reseau :
+Cloudflare est l'un des CDN les plus repandus. Interrogeons une librairie JavaScript populaire hebergee sur leur réseau :
 
 ```bash
 curl -sI https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js \
   | grep -iE "(cache-control|cf-cache|age|x-cache|server|etag|vary|content-encoding)"
 ```
 
-**Exemple de reponse :**
+**Exemple de réponse :**
 
 ```
 server: cloudflare
@@ -715,28 +715,28 @@ content-encoding: br
 
 | Header | Signification |
 |--------|--------------|
-| `server: cloudflare` | Confirme que la reponse est servie par le reseau Cloudflare |
+| `server: cloudflare` | Confirme que la réponse est servie par le réseau Cloudflare |
 | `cache-control: public, max-age=30672000` | Le contenu est cacheable par tous (CDN + navigateur) pendant ~355 jours. C'est typique pour un asset statique versionne |
-| `cf-cache-status: HIT` | Header **proprietaire Cloudflare**. Valeurs possibles : `HIT` (servi depuis le cache edge), `MISS` (pas en cache, recupere a l'origin), `EXPIRED` (etait en cache mais TTL depasse), `DYNAMIC` (jamais cache), `BYPASS` (regle de contournement) |
+| `cf-cache-status: HIT` | Header **proprietaire Cloudflare**. Valeurs possibles : `HIT` (servi depuis le cache edge), `MISS` (pas en cache, récupéré a l'origin), `EXPIRED` (etait en cache mais TTL dépasse), `DYNAMIC` (jamais cache), `BYPASS` (regle de contournement) |
 | `age: 245832` | Le contenu est en cache depuis ~2.8 jours (245 832 secondes). Ce header est standard HTTP (RFC 9111) |
 | `etag` | Identifiant unique de la version du fichier, utilise pour la revalidation conditionnelle |
-| `vary: Accept-Encoding` | Le CDN stocke des variantes differentes selon l'encodage demande (gzip, brotli, etc.) |
-| `content-encoding: br` | La reponse est compressée en Brotli |
+| `vary: Accept-Encoding` | Le CDN stocke des variantes différentes selon l'encodage demandé (gzip, brotli, etc.) |
+| `content-encoding: br` | La réponse est compressée en Brotli |
 
-> **A propos de `cf-ray`** : Cloudflare ajoute egalement un header `cf-ray` (ex: `cf-ray: 7a1234567890-CDG`). C'est un identifiant unique de requete. Les 3 dernieres lettres (`CDG`) indiquent le **POP** (Point of Presence) qui a servi la reponse -- ici l'aeroport Charles-de-Gaulle a Paris. Cet identifiant est essentiel pour le **debugging** : il permet au support Cloudflare de retrouver exactement le trajet de la requete.
+> **A propos de `cf-ray`** : Cloudflare ajoute egalement un header `cf-ray` (ex: `cf-ray: 7a1234567890-CDG`). C'est un identifiant unique de requête. Les 3 dernières lettres (`CDG`) indiquent le **POP** (Point of Presence) qui a servi la réponse -- ici l'aeroport Charles-de-Gaulle a Paris. Cet identifiant est essentiel pour le **debugging** : il permet au support Cloudflare de retrouver exactement le trajet de la requête.
 
 ---
 
-### Exercice 2 : Comparer avec un CDN different (jsDelivr / Fastly)
+### Exercice 2 : Comparer avec un CDN différent (jsDelivr / Fastly)
 
-jsDelivr utilise le reseau **Fastly** comme CDN. Comparons les headers avec la meme librairie :
+jsDelivr utilise le réseau **Fastly** comme CDN. Comparons les headers avec la même librairie :
 
 ```bash
 curl -sI https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js \
   | grep -iE "(cache-control|x-cache|age|server|etag|vary|content-encoding|x-served-by)"
 ```
 
-**Exemple de reponse :**
+**Exemple de réponse :**
 
 ```
 cache-control: public, max-age=31536000, s-maxage=31536000, immutable
@@ -754,16 +754,16 @@ x-served-by: cache-cdg20734-CDG, cache-par-lfpg1960042-PAR
 | Header de statut cache | `cf-cache-status: HIT` | `x-cache: HIT` |
 | Identification du POP | `cf-ray: xxx-CDG` | `x-served-by: cache-cdg20734-CDG` |
 | TTL | `max-age=30672000` (~355j) | `max-age=31536000` (365j) + `immutable` |
-| Directive `s-maxage` | Absente (meme TTL partout) | Presente (TTL specifique au CDN) |
+| Directive `s-maxage` | Absente (même TTL partout) | Presente (TTL spécifique au CDN) |
 | Directive `immutable` | Absente | Presente (empeche la revalidation) |
 
-> **`x-served-by`** : Ce header Fastly indique la chaine de serveurs qui ont traite la requete. Quand vous voyez deux valeurs separees par une virgule, cela signifie que la requete est passee par un **shield** (premier serveur) avant d'atteindre l'**edge** (deuxieme serveur). Les noms de serveurs contiennent le code du POP (ex : `CDG` = Paris Charles-de-Gaulle, `PAR` = Paris).
+> **`x-served-by`** : Ce header Fastly indique la chaine de serveurs qui ont traite la requête. Quand vous voyez deux valeurs separees par une virgule, cela signifie que la requête est passee par un **shield** (premier serveur) avant d'atteindre l'**edge** (deuxieme serveur). Les noms de serveurs contiennent le code du POP (ex : `CDG` = Paris Charles-de-Gaulle, `PAR` = Paris).
 
 ---
 
 ### Exercice 3 : Observer un cache MISS vs HIT
 
-Pour observer la difference entre un MISS et un HIT, nous pouvons forcer un MISS en ajoutant un parametre unique a l'URL (cache buster) :
+Pour observer la différence entre un MISS et un HIT, nous pouvons forcer un MISS en ajoutant un paramètre unique a l'URL (cache buster) :
 
 ```bash
 # Premiere requete : MISS probable (URL jamais vue par le cache)
@@ -794,16 +794,16 @@ age: 2
 
 **Ce qu'il faut observer :**
 
-- Sur un **MISS**, `age` est a `0` (le contenu vient d'etre recupere a l'origin).
+- Sur un **MISS**, `age` est a `0` (le contenu vient d'etre récupéré a l'origin).
 - Sur un **HIT**, `age` est > 0 et `cf-cache-status` passe a `HIT`.
 - Le `cachebust` simule une nouvelle URL unique : le CDN ne l'a jamais vue, donc il doit aller a l'origin.
-- C'est exactement ce qui se passe apres un **deploiement** avec des noms de fichiers hashes (`app.a3b4c5.js`) : le premier visiteur declenche un MISS, les suivants profitent du HIT.
+- C'est exactement ce qui se passe après un **déploiement** avec des noms de fichiers hashes (`app.a3b4c5.js`) : le premier visiteur declenche un MISS, les suivants profitent du HIT.
 
 ---
 
 ### Exercice 4 : Analyser les headers Vary
 
-Le header `Vary: Accept-Encoding` oblige le CDN a stocker **une variante par encodage**. Verifions cela en envoyant des headers `Accept-Encoding` differents :
+Le header `Vary: Accept-Encoding` oblige le CDN a stocker **une variante par encodage**. Verifions cela en envoyant des headers `Accept-Encoding` différents :
 
 ```bash
 # Requete avec compression gzip
@@ -843,14 +843,14 @@ content-length: ~73 000 octets (taille originale)
 
 **Ce qu'il faut retenir :**
 
-- Le CDN stocke **3 variantes** du meme fichier grace au header `Vary`.
-- Chaque variante a une taille (`content-length`) differente selon la compression.
+- Le CDN stocke **3 variantes** du même fichier grace au header `Vary`.
+- Chaque variante à une taille (`content-length`) différente selon la compression.
 - **Brotli** (`br`) offre une meilleure compression que **gzip** (~15-20% plus petit).
-- Sans `Vary`, le CDN pourrait envoyer une reponse gzip a un client qui a demande du Brotli, ou vice-versa — causant des erreurs de decodage.
+- Sans `Vary`, le CDN pourrait envoyer une réponse gzip à un client qui a demandé du Brotli, ou vice-versa — causant des erreurs de decodage.
 
 ---
 
-### Tableau recapitulatif : Headers CDN en production
+### Tableau récapitulatif : Headers CDN en production
 
 | Header | Cloudflare | Fastly / jsDelivr | Akamai |
 |--------|-----------|-------------------|--------|
@@ -862,10 +862,10 @@ content-length: ~73 000 octets (taille originale)
 | **Variantes** | `vary: Accept-Encoding` | `vary: Accept-Encoding` | `vary: Accept-Encoding` |
 | **ETag** | Oui | Oui | Oui |
 | **Nombre de hits** | Non expose | `x-cache-hits: 42` | Non expose |
-| **Timer de requete** | Non expose | `x-timer: S170xxx.xxx` | Non expose |
+| **Timer de requête** | Non expose | `x-timer: S170xxx.xxx` | Non expose |
 | **Header proprietaire** | `cf-ray`, `cf-cache-status` | `x-served-by`, `x-timer` | `x-akamai-request-id` |
 
-> **Conseil** : dans un vrai projet, ajoutez `curl -sI <votre-url> | grep -iE "cache|age|vary|x-cache|cf-"` a votre checklist de deploiement. Cela permet de verifier immediatement que le CDN cache bien vos ressources avec les bons TTL.
+> **Conseil** : dans un vrai projet, ajoutez `curl -sI <votre-url> | grep -iE "cache|age|vary|x-cache|cf-"` a votre checklist de déploiement. Cela permet de vérifier immediatement que le CDN cache bien vos ressources avec les bons TTL.
 
 ---
 
@@ -885,7 +885,7 @@ L'article 42 de l'auteur "alice" dans la categorie "tech" contient une erreur fa
 2. Quels `Surrogate-Key` aurais-tu mis sur la page de la categorie "tech" ?
 3. Quelle commande de purge utiliser pour invalider tout ce qui touche a l'article 42 ?
 4. Pourquoi un soft purge serait-il preferable ici ?
-5. Apres correction, combien de requetes arrivent a l'origin si les 3 millions de visiteurs reviennent ?
+5. Après correction, combien de requêtes arrivent a l'origin si les 3 millions de visiteurs reviennent ?
 
 ### Reponse
 
@@ -912,3 +912,14 @@ L'article 42 de l'auteur "alice" dans la categorie "tech" contient une erreur fa
    - Soit environ 2 a 5 requetes, PAS 3 millions !
    - Le shield sert les POPs, les POPs servent les utilisateurs
 ```
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 08 cdn](../screencasts/screencast-08-cdn.md)
+2. **Lab** : [lab-07-mini-cdn](../labs/lab-07-mini-cdn/README)
+3. **Visualisation** : [Multi-Layer Cache](../visualizations/multi-layer-cache.html)
+4. **Quiz** : [quiz 08 cdn](../quizzes/quiz-08-cdn.html)
+:::

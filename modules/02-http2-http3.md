@@ -1,11 +1,11 @@
 # Module 02 — HTTP/2 & HTTP/3
 
 > **Objectif** : Comprendre les evolutions majeures du protocole HTTP, pourquoi HTTP/2 et HTTP/3 existent, et leur impact sur le caching.
-> **Difficulte** : ⭐⭐ (Intermediaire)
+> **Difficulte** : ⭐⭐ (Intermédiaire)
 
 ---
 
-## 1. Les problemes de HTTP/1.1
+## 1. Les problèmes de HTTP/1.1
 
 ### 1.1 Rappel : pourquoi changer ?
 
@@ -26,9 +26,9 @@ Camion 12 :    [EN ATTENTE ............]
 Camion 13 :    [EN ATTENTE ............]
 ```
 
-**Probleme 1 : Head-of-Line (HoL) Blocking**
+**Problème 1 : Head-of-Line (HoL) Blocking**
 
-Sur chaque connexion, les requetes doivent etre traitees **dans l'ordre**. Si la requete 1 est lente, toutes les requetes suivantes sur cette connexion sont bloquees.
+Sur chaque connexion, les requêtes doivent etre traitees **dans l'ordre**. Si la requête 1 est lente, toutes les requêtes suivantes sur cette connexion sont bloquees.
 
 ```
 Connexion 1 :
@@ -40,7 +40,7 @@ La petite requete CSS attend que la grosse image soit terminee.
 C'est comme etre bloque derriere un tracteur sur une route a une voie.
 ```
 
-**Probleme 2 : Limite de 6 connexions par domaine**
+**Problème 2 : Limite de 6 connexions par domaine**
 
 ```
 Une page web moderne charge typiquement :
@@ -54,7 +54,7 @@ Une page web moderne charge typiquement :
 Avec 6 connexions max, ca fait des dizaines d'allers-retours.
 ```
 
-**Probleme 3 : Headers redondants et non compresses**
+**Problème 3 : Headers redondants et non compresses**
 
 ```
 # Chaque requete renvoie les MEMES headers a chaque fois :
@@ -72,7 +72,7 @@ Connection: keep-alive
 # Pour 50 requetes : 50 x 800 = 40 Ko de headers redondants !
 ```
 
-### 1.2 Tableau recapitulatif des limitations
+### 1.2 Tableau récapitulatif des limitations
 
 | Limitation                     | Impact                                    | Contournement HTTP/1.1         |
 |-------------------------------|-------------------------------------------|--------------------------------|
@@ -110,7 +110,7 @@ Les morceaux s'entrelacent librement.
 
 ### 2.2 Concepts fondamentaux de HTTP/2
 
-HTTP/2 introduit trois concepts cles :
+HTTP/2 introduit trois concepts clés :
 
 ```
 +-----------------------------------------------------------+
@@ -142,7 +142,7 @@ Vocabulaire :
 
 ### 2.3 Les frames HTTP/2
 
-En HTTP/1.1, les messages sont du texte brut. En HTTP/2, tout est decouper en **frames binaires** :
+En HTTP/1.1, les messages sont du texte brut. En HTTP/2, tout est découper en **frames binaires** :
 
 ```
 FRAME HTTP/2 (format binaire)
@@ -163,10 +163,10 @@ FRAME HTTP/2 (format binaire)
 
 | Type          | Code | Description                               |
 |---------------|------|-------------------------------------------|
-| DATA          | 0x0  | Transporte le body de la requete/reponse  |
+| DATA          | 0x0  | Transporte le body de la requête/réponse  |
 | HEADERS       | 0x1  | Transporte les headers (compresses HPACK) |
 | PRIORITY      | 0x2  | Indique la priorite d'un stream           |
-| RST_STREAM    | 0x3  | Annule un stream specifique               |
+| RST_STREAM    | 0x3  | Annule un stream spécifique               |
 | SETTINGS      | 0x4  | Configuration de la connexion             |
 | PUSH_PROMISE  | 0x5  | Annonce un server push                    |
 | PING          | 0x6  | Mesure la latence / keepalive             |
@@ -175,7 +175,7 @@ FRAME HTTP/2 (format binaire)
 
 ### 2.4 Multiplexage en detail
 
-Le multiplexage est LA fonctionnalite qui change tout. Voici comment ca fonctionne :
+Le multiplexage est LA fonctionnalite qui change tout. Voici comment ça fonctionne :
 
 ```
 CLIENT                                          SERVEUR
@@ -239,7 +239,7 @@ Requete 2 : "Memes headers que requete 1,
 Requete 3 : "Memes headers, chemin = /page3"         ~15 octets !
 ```
 
-**Comment ca marche ?**
+**Comment ça marche ?**
 
 ```
 TABLE DYNAMIQUE (partagee entre client et serveur)
@@ -256,11 +256,11 @@ Requete suivante : "Index 62, 63, 64, 65, + :path=/page2"
 Au lieu de re-envoyer 300 octets de texte, on envoie des INDEX !
 ```
 
-**Gain typique** : 85-90% de reduction de la taille des headers apres la premiere requete.
+**Gain typique** : 85-90% de reduction de la taille des headers après la première requête.
 
 ### 2.6 Server Push
 
-Le server push permet au serveur d'envoyer des ressources **avant que le client ne les demande** :
+Le server push permet au serveur d'envoyer des ressources **avant que le client ne les demandé** :
 
 ```
 SANS SERVER PUSH                        AVEC SERVER PUSH
@@ -315,18 +315,18 @@ server.on('stream', (stream: ServerHttp2Stream, headers: IncomingHttpHeaders) =>
 server.listen(8443);
 ```
 
-**Attention** : Le server push a ete abandonne par Chrome en 2022 (Chrome 106). La raison ? Il est tres difficile a configurer correctement et les CDN ne le supportent pas bien. L'alternative recommandee est `103 Early Hints`.
+**Attention** : Le server push a ete abandonne par Chrome en 2022 (Chrome 106). La raison ? Il est très difficile a configurer correctement et les CDN ne le supportent pas bien. L'alternative recommandee est `103 Early Hints`.
 
 ### 2.7 Impact de HTTP/2 sur le caching
 
-HTTP/2 ne change **pas** les mecanismes de cache (Cache-Control, ETag, etc.) mais il change la facon dont on optimise :
+HTTP/2 ne change **pas** les mécanismes de cache (Cache-Control, ETag, etc.) mais il change la façon dont on optimise :
 
 | Pratique HTTP/1.1                | Avec HTTP/2                        |
 |----------------------------------|------------------------------------|
 | Domain sharding (3-4 domaines)   | **Inutile** (1 connexion suffit)   |
-| Concatenation CSS/JS (bundles)   | **Moins necessaire** (multiplexage)|
-| Sprites d'images                 | **Moins necessaire**               |
-| Inlining CSS dans le HTML        | **Moins necessaire**               |
+| Concatenation CSS/JS (bundles)   | **Moins nécessaire** (multiplexage)|
+| Sprites d'images                 | **Moins nécessaire**               |
+| Inlining CSS dans le HTML        | **Moins nécessaire**               |
 
 **Pourquoi ?** Avec le multiplexage, telecharger 50 petits fichiers est aussi rapide que 1 gros fichier. Plus besoin de "tricher" en regroupant les ressources.
 
@@ -336,9 +336,9 @@ HTTP/2 ne change **pas** les mecanismes de cache (Cache-Control, ETag, etc.) mai
 
 ## 3. HTTP/3 : QUIC et l'ere de l'UDP
 
-### 3.1 Le probleme restant de HTTP/2
+### 3.1 Le problème restant de HTTP/2
 
-HTTP/2 resout le HoL blocking au niveau **HTTP**, mais il reste un probleme au niveau **TCP** :
+HTTP/2 resout le HoL blocking au niveau **HTTP**, mais il reste un problème au niveau **TCP** :
 
 ```
 HTTP/2 SUR TCP : HoL BLOCKING NIVEAU TRANSPORT
@@ -369,11 +369,11 @@ a des streams differents. Pour TCP, c'est juste
 un flux d'octets continu.
 ```
 
-**Analogie** : Imagine un tuyau unique (TCP). Si un caillou (paquet perdu) bloque le tuyau, TOUT l'eau (tous les streams) est bloquee, meme si le caillou ne concerne qu'un seul stream.
+**Analogie** : Imagine un tuyau unique (TCP). Si un caillou (paquet perdu) bloque le tuyau, TOUT l'eau (tous les streams) est bloquee, même si le caillou ne concerne qu'un seul stream.
 
 ### 3.2 QUIC : la solution
 
-QUIC (Quick UDP Internet Connections) est un nouveau protocole de transport qui resout ce probleme :
+QUIC (Quick UDP Internet Connections) est un nouveau protocole de transport qui resout ce problème :
 
 ```
 HTTP/3 SUR QUIC (UDP) : PAS DE HoL BLOCKING
@@ -466,7 +466,7 @@ QUIC: Connexion identifiee par un Connection ID (independant de l'IP)
       L'utilisateur ne remarque rien.
 ```
 
-**Analogie** : TCP c'est comme un numero de telephone fixe (lie a un endroit). QUIC c'est comme un numero de portable (tu peux bouger, le numero reste le meme).
+**Analogie** : TCP c'est comme un numéro de telephone fixe (lie à un endroit). QUIC c'est comme un numéro de portable (tu peux bouger, le numéro reste le même).
 
 **Avantage 3 : Pas de HoL blocking au niveau transport**
 
@@ -482,7 +482,7 @@ Comme explique plus haut, la perte d'un paquet sur un stream ne bloque pas les a
 | HoL blocking transport   | Oui                | Oui (TCP)          | Non (QUIC)          |
 | Compression headers      | Non                | HPACK              | QPACK               |
 | Server push              | Non                | Oui (abandonne)    | Oui (rarement utilise)|
-| Chiffrement              | Optionnel (TLS)    | Quasi-obligatoire  | Toujours (integre)  |
+| Chiffrement              | Optionnel (TLS)    | Quasi-obligatoire  | Toujours (intégré)  |
 | 0-RTT                    | Non                | Non (sauf TLS 1.3) | Oui                 |
 | Migration connexion      | Non                | Non                | Oui                 |
 | RTT connexion initiale   | 2-3 RTT            | 2-3 RTT            | 1 RTT (0 en 0-RTT) |
@@ -532,7 +532,7 @@ Chrome DevTools > Network > Clic droit sur l'en-tete des colonnes
 h2 = HTTP/2    h3 = HTTP/3    http/1.1 = HTTP/1.1
 ```
 
-### 4.2 Verifier avec curl
+### 4.2 Vérifier avec curl
 
 ```bash
 # Voir quelle version HTTP est utilisee
@@ -551,7 +551,7 @@ curl -w "DNS: %{time_namelookup}s\nTCP: %{time_connect}s\nTLS: %{time_appconnect
      -o /dev/null -s --http2 https://example.com
 ```
 
-### 4.3 Creer un serveur HTTP/2 avec Node.js
+### 4.3 Créer un serveur HTTP/2 avec Node.js
 
 ```typescript
 // server-http2.ts
@@ -624,7 +624,7 @@ server.listen(8443, () => {
 });
 ```
 
-### 4.4 Waterfall : la difference visuelle
+### 4.4 Waterfall : la différence visuelle
 
 ```
 HTTP/1.1 WATERFALL (Chrome DevTools)
@@ -734,23 +734,23 @@ STRATEGIE DE FALLBACK DU NAVIGATEUR
    +-- Utiliser HTTP/1.1
 ```
 
-**Pourquoi le fallback est necessaire ?** Certains reseaux d'entreprise bloquent UDP (necessaire pour QUIC/HTTP3). Le navigateur doit pouvoir revenir a HTTP/2 ou meme HTTP/1.1.
+**Pourquoi le fallback est nécessaire ?** Certains réseaux d'entreprise bloquent UDP (nécessaire pour QUIC/HTTP3). Le navigateur doit pouvoir revenir a HTTP/2 ou même HTTP/1.1.
 
 ---
 
-## Points cles
+## Points clés
 
 1. **HTTP/1.1** souffre du Head-of-Line blocking, de la limite de 6 connexions et des headers non compresses.
-2. **HTTP/2** resout ces problemes avec le multiplexage (streams sur 1 connexion), HPACK (compression headers) et les priorites.
-3. **HTTP/2 ne change pas les mecanismes de cache** (Cache-Control, ETag fonctionnent identiquement) mais rend obsoletes certaines optimisations (domain sharding, sprites, concatenation).
+2. **HTTP/2** resout ces problèmes avec le multiplexage (streams sur 1 connexion), HPACK (compression headers) et les priorites.
+3. **HTTP/2 ne change pas les mécanismes de cache** (Cache-Control, ETag fonctionnent identiquement) mais rend obsoletes certaines optimisations (domain sharding, sprites, concatenation).
 4. **HTTP/3 utilise QUIC (UDP)** pour eliminer le HoL blocking au niveau transport, et offre le 0-RTT et la migration de connexion.
-5. **La negociation de protocole est automatique** : le navigateur essaie le meilleur protocole disponible et fait du fallback si necessaire.
+5. **La negociation de protocole est automatique** : le navigateur essaie le meilleur protocole disponible et fait du fallback si nécessaire.
 
 ---
 
 ## Lab associe
 
--> `labs/02-comparer-http1-http2.md` — Mesurer la difference de performance entre HTTP/1.1 et HTTP/2
+-> `labs/02-comparer-http1-http2.md` — Mesurer la différence de performance entre HTTP/1.1 et HTTP/2
 
 ---
 
@@ -770,10 +770,10 @@ STRATEGIE DE FALLBACK DU NAVIGATEUR
 **Retiens juste ceci :**
 
 - **HTTP/1.1** : une file d'attente par connexion, maximum 6 connexions. Comme 6 caisses de supermarche avec des files separees.
-- **HTTP/2** : une seule connexion avec des "voies" virtuelles (streams). Comme un guichet unique ultra-rapide qui gere tout le monde en parallele.
+- **HTTP/2** : une seule connexion avec des "voies" virtuelles (streams). Comme un guichet unique ultra-rapide qui géré tout le monde en parallele.
 - **HTTP/3** : pareil que HTTP/2 mais sur un meilleur "tuyau" (QUIC au lieu de TCP) qui ne bloque pas tout quand un paquet est perdu.
 
-Pour le cache, les trois versions utilisent **exactement les memes headers** (Cache-Control, ETag, etc.). La difference est juste dans la vitesse de transport.
+Pour le cache, les trois versions utilisent **exactement les memes headers** (Cache-Control, ETag, etc.). La différence est juste dans la vitesse de transport.
 
 ---
 
@@ -781,7 +781,7 @@ Pour le cache, les trois versions utilisent **exactement les memes headers** (Ca
 
 ### Analyse comparative dans DevTools
 
-**Objectif** : Observer les differences entre HTTP/1.1 et HTTP/2 dans Chrome DevTools.
+**Objectif** : Observer les différences entre HTTP/1.1 et HTTP/2 dans Chrome DevTools.
 
 **Etapes :**
 
@@ -795,18 +795,28 @@ Pour le cache, les trois versions utilisent **exactement les memes headers** (Ca
 4. Pour chaque site, reponds a :
    - Quel protocole est utilise ?
    - Combien de connexions TCP sont ouvertes ? (onglet "Connection ID")
-   - Y a-t-il un header `Alt-Svc` dans les reponses ?
-   - Quel est le waterfall ? Les requetes demarrent-elles en parallele ?
+   - Y a-t-il un header `Alt-Svc` dans les réponses ?
+   - Quel est le waterfall ? Les requêtes demarrent-elles en parallele ?
 
 <details>
 <summary>Ce que tu devrais observer</summary>
 
-- **google.com** : Utilise HTTP/3 (h3). Tu devrais voir `alt-svc: h3=":443"` dans les headers de reponse. Toutes les requetes partagent une seule connexion. Le waterfall montre des requetes en parallele.
+- **google.com** : Utilise HTTP/3 (h3). Tu devrais voir `alt-svc: h3=":443"` dans les headers de réponse. Toutes les requêtes partagent une seule connexion. Le waterfall montre des requêtes en parallele.
 
-- **wikipedia.org** : Utilise HTTP/2 (h2). Une seule connexion TCP pour toutes les requetes. Le multiplexage est visible dans le waterfall.
+- **wikipedia.org** : Utilise HTTP/2 (h2). Une seule connexion TCP pour toutes les requêtes. Le multiplexage est visible dans le waterfall.
 
-- **httpbin.org** : Peut utiliser HTTP/1.1. Tu verras potentiellement plusieurs connexions TCP, et les requetes sont plus sequentielles.
+- **httpbin.org** : Peut utiliser HTTP/1.1. Tu verras potentiellement plusieurs connexions TCP, et les requêtes sont plus sequentielles.
 
-La difference la plus visible est dans le **waterfall** : avec HTTP/2 et HTTP/3, les requetes demarrent presque toutes en meme temps, alors qu'en HTTP/1.1 elles sont echelonnees par lots de 6.
+La différence la plus visible est dans le **waterfall** : avec HTTP/2 et HTTP/3, les requêtes demarrent presque toutes en même temps, alors qu'en HTTP/1.1 elles sont echelonnees par lots de 6.
 
 </details>
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 02 http2 http3](../screencasts/screencast-02-http2-http3.md)
+2. **Lab** : [lab-02-http2-multiplexing](../labs/lab-02-http2-multiplexing/README)
+3. **Quiz** : [quiz 02 http2 http3](../quizzes/quiz-02-http2-http3.html)
+:::

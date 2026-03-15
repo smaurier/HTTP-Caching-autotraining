@@ -1,15 +1,17 @@
 # Module 10 — SSR (Server-Side Rendering) et Cache
 
-> **Objectif** : Comprendre le cycle de rendu SSR, le concept d'hydration, le streaming SSR, la gestion du state initial et les strategies de cache pour le HTML genere cote serveur.
+> **Objectif** : Comprendre le cycle de rendu SSR, le concept d'hydration, le streaming SSR, la gestion du state initial et les stratégies de cache pour le HTML généré cote serveur.
 > **Difficulte** : :star::star::star::star:
 
 ---
 
-> **⚠️ Les modules 10, 11 et 12 passent en niveau expert.** C'est normal que ca soit plus difficile — SSR, ISR et Edge Rendering sont des sujets avances. Tu as toutes les bases (modules 00-09). Si un module te bloque, note ce que tu ne comprends pas et passe au suivant — ces concepts se clarifient quand tu les vois en pratique dans les cours Vue/React/Angular.
+> **SSR cross-cours** : le SSR est aussi couvert dans 03-Vue module 04 (SSR/Hydration, Nuxt 3) et 08-React module 06 (Next.js App Router, Server Components). Ici l'angle est protocole HTTP : cache du HTML généré, streaming, CDN, stratégies de revalidation.
+
+> **⚠️ Les modules 10, 11 et 12 passent en niveau expert.** C'est normal que ça soit plus difficile — SSR, ISR et Edge Rendering sont des sujets avances. Tu as toutes les bases (modules 00-09). Si un module te bloque, note ce que tu ne comprends pas et passe au suivant — ces concepts se clarifient quand tu les vois en pratique dans les cours Vue/React/Angular.
 
 ## 1. Pourquoi SSR ?
 
-### 1.1 Le probleme du CSR (Client-Side Rendering)
+### 1.1 Le problème du CSR (Client-Side Rendering)
 
 Avec une SPA classique (React, Vue, Angular), le HTML initial est presque vide :
 
@@ -40,7 +42,7 @@ Timeline CSR :
 
 ### 1.2 La solution SSR
 
-Le serveur execute le JavaScript, genere le HTML complet et l'envoie :
+Le serveur exécuté le JavaScript, généré le HTML complet et l'envoie :
 
 ```html
 <!-- Ce que le serveur envoie avec SSR -->
@@ -86,7 +88,7 @@ Timeline SSR :
 | Charge serveur | Faible | Elevee (CPU) |
 | Perception utilisateur | Ecran blanc | Contenu immediat |
 
-### 1.4 Les 3 avantages cles du SSR
+### 1.4 Les 3 avantages clés du SSR
 
 ```
 1. SEO : Google Bot recoit du HTML complet, pas un <div> vide
@@ -97,7 +99,7 @@ Timeline SSR :
 
 ---
 
-## 2. Cycle SSR : requete -> render -> HTML -> envoi -> hydration
+## 2. Cycle SSR : requête -> render -> HTML -> envoi -> hydration
 
 ### 2.1 Le cycle complet
 
@@ -315,7 +317,7 @@ server.listen(3000, () => {
 
 ### 3.1 Qu'est-ce que l'hydration ?
 
-L'hydration est le processus par lequel le JavaScript cote client **"prend le controle"** du HTML genere par le serveur :
+L'hydration est le processus par lequel le JavaScript cote client **"prend le controle"** du HTML généré par le serveur :
 
 ```
 HTML SSR (statique)          +  JavaScript client      =  Page interactive
@@ -389,9 +391,9 @@ if ('PerformanceObserver' in window) {
 
 ## 4. Streaming SSR
 
-### 4.1 Le probleme du SSR classique
+### 4.1 Le problème du SSR classique
 
-En SSR classique, le serveur doit attendre que **tout** le HTML soit genere avant de commencer a envoyer :
+En SSR classique, le serveur doit attendre que **tout** le HTML soit généré avant de commencer a envoyer :
 
 ```
 SSR classique (buffered) :
@@ -407,7 +409,7 @@ Le client attend 300ms avant de recevoir le premier octet.
 
 ### 4.2 SSR streaming
 
-Avec le streaming, le serveur envoie le HTML par morceaux au fur et a mesure :
+Avec le streaming, le serveur envoie le HTML par morceaux au fur et à mesure :
 
 ```
 SSR streaming :
@@ -572,9 +574,9 @@ Gain : l'utilisateur voit du contenu 500ms plus tot !
 
 ## 5. SSR Tokens : window.__INITIAL_STATE__
 
-### 5.1 Le probleme du double-fetch
+### 5.1 Le problème du double-fetch
 
-Sans state initial, le client doit re-fetcher les donnees que le serveur avait deja :
+Sans state initial, le client doit re-fetcher les donnees que le serveur avait déjà :
 
 ```
 SANS __INITIAL_STATE__ :
@@ -594,9 +596,9 @@ AVEC __INITIAL_STATE__ :
   Les donnees sont fetchees UNE SEULE FOIS. Le client utilise le state embarque.
 ```
 
-### 5.3 Securite de la serialisation
+### 5.3 Sécurité de la serialisation
 
-Attention : injecter du JSON dans du HTML peut creer des failles XSS.
+Attention : injecter du JSON dans du HTML peut créer des failles XSS.
 
 ```js
 // DANGER : serialisation naive
@@ -784,7 +786,7 @@ Solution 3 : Edge-Side Includes (ESI) -- le CDN assemble les morceaux
 
 ### 6.3 Cache-keys pour le SSR
 
-La cache-key determine QUAND deux requetes sont considerees identiques :
+La cache-key déterminé QUAND deux requêtes sont considerees identiques :
 
 ```
 Cache-key par defaut : methode + URL + headers Vary
@@ -820,7 +822,7 @@ GET /style.css (Accept-Encoding: gzip)    --> Cache-key A : compresse
 GET /style.css (Accept-Encoding: identity) --> Cache-key B : non compresse
 ```
 
-**Attention** : ne jamais utiliser `Vary: *` (desactive le cache) ou `Vary: Cookie` (une cache-key par utilisateur = aucun partage).
+**Attention** : ne jamais utiliser `Vary: *` (désactivé le cache) ou `Vary: Cookie` (une cache-key par utilisateur = aucun partage).
 
 ### 6.5 Implementation : cache SSR avec cache-keys intelligentes
 
@@ -1021,9 +1023,9 @@ server.listen(3000, () => {
 });
 ```
 
-### 6.6 Strategies de cache SSR par framework
+### 6.6 Stratégies de cache SSR par framework
 
-| Framework | Cache SSR natif | Strategie recommandee |
+| Framework | Cache SSR natif | Stratégie recommandee |
 |-----------|----------------|----------------------|
 | Next.js | ISR (Incremental Static Regeneration) | `revalidate: 60` dans `getStaticProps` |
 | Nuxt 3 | `routeRules` + Nitro cache | `swr: 3600` dans `nuxt.config` |
@@ -1058,7 +1060,7 @@ CACHER quand :
 
 ---
 
-## 7. Recapitulatif : architecture SSR + cache optimale
+## 7. Récapitulatif : architecture SSR + cache optimale
 
 ```
 Architecture recommandee :
@@ -1087,16 +1089,16 @@ Invalidation :
 
 ---
 
-## Points cles
+## Points clés
 
-1. Le **SSR** genere le HTML cote serveur, offrant un meilleur SEO et un FCP plus rapide que le CSR.
-2. Le cycle SSR est : requete -> fetch donnees -> render HTML -> envoyer -> **hydration** cote client.
+1. Le **SSR** généré le HTML cote serveur, offrant un meilleur SEO et un FCP plus rapide que le CSR.
+2. Le cycle SSR est : requête -> fetch donnees -> render HTML -> envoyer -> **hydration** cote client.
 3. L'**hydration** est le processus par lequel le JS "prend le controle" du HTML statique -- pendant ce temps, la page est visible mais non interactive ("uncanny valley").
 4. Le **streaming SSR** envoie le HTML par morceaux, reduisant drastiquement le TTFB (le shell est envoye immediatement).
-5. `window.__INITIAL_STATE__` permet au client de recuperer les donnees sans re-fetch -- attention a la **serialisation securisee** (XSS).
+5. `window.__INITIAL_STATE__` permet au client de récupérer les donnees sans re-fetch -- attention à la **serialisation securisee** (XSS).
 6. Le cache SSR utilise des **cache-keys** combinees (URL + langue + device) et le header **Vary** pour differencier les variantes.
 7. Ne jamais cacher du HTML contenant des donnees **personnalisees** (panier, CSRF, dashboard) dans un cache partage.
-8. La strategie optimale combine un **TTL court cote browser** (30s) avec un **TTL plus long cote CDN** (5min) et des **Surrogate Keys** pour la purge instantanee.
+8. La stratégie optimale combine un **TTL court cote browser** (30s) avec un **TTL plus long cote CDN** (5min) et des **Surrogate Keys** pour la purge instantanee.
 
 ---
 
@@ -1121,9 +1123,9 @@ Invalidation :
 
 Imagine un restaurant :
 
-- **CSR** (Client-Side Rendering) = on te donne les ingredients et la recette, tu cuisines toi-meme a la maison. C'est long avant de manger, mais apres c'est flexible.
+- **CSR** (Client-Side Rendering) = on te donne les ingredients et la recette, tu cuisines toi-même à la maison. C'est long avant de manger, mais après c'est flexible.
 - **SSR** (Server-Side Rendering) = le chef prepare le plat en cuisine et te l'apporte tout pret. Tu manges plus vite, mais le chef est occupe.
-- **Hydration** = apres que le plat est servi (HTML affiche), le serveur t'apporte les couverts (event listeners). Pendant un instant, tu as le plat devant toi mais tu ne peux pas encore le manger -- c'est la "uncanny valley".
+- **Hydration** = après que le plat est servi (HTML affiche), le serveur t'apporte les couverts (event listeners). Pendant un instant, tu as le plat devant toi mais tu ne peux pas encore le manger -- c'est la "uncanny valley".
 - **Streaming SSR** = le chef envoie l'entree des qu'elle est prete, sans attendre le plat et le dessert.
 - **`__INITIAL_STATE__`** = le chef inscrit la recette sur un petit papier dans l'assiette, pour que tu puisses refaire le plat plus tard sans redemander.
 - **Cache SSR** = preparer 10 portions d'avance pour les plats populaires.
@@ -1179,7 +1181,7 @@ export default async function ProductPage({ params }) {
 
 ### Routes dynamiques automatiques : `headers()` et `cookies()`
 
-L'utilisation de `headers()` ou `cookies()` rend automatiquement la route **dynamique** (SSR a chaque requete, pas de cache) :
+L'utilisation de `headers()` ou `cookies()` rend automatiquement la route **dynamique** (SSR à chaque requête, pas de cache) :
 
 ```typescript
 // app/dashboard/page.tsx — Route automatiquement dynamique
@@ -1272,14 +1274,14 @@ export default async function ProductPage({ params }) {
 }
 ```
 
-### Recapitulatif Next.js SSR
+### Récapitulatif Next.js SSR
 
 | Configuration | Comportement | Cache-Control |
 |--------------|-------------|---------------|
-| `dynamic = 'force-dynamic'` | SSR a chaque requete | `private, no-cache, no-store` |
-| `revalidate = 0` | SSR a chaque requete | `private, no-cache, no-store` |
+| `dynamic = 'force-dynamic'` | SSR à chaque requête | `private, no-cache, no-store` |
+| `revalidate = 0` | SSR à chaque requête | `private, no-cache, no-store` |
 | `revalidate = 60` | ISR : cache 60s puis revalide | `s-maxage=60, stale-while-revalidate` |
-| `cache: 'no-store'` (fetch) | Ce fetch specifique n'est jamais cache | — |
+| `cache: 'no-store'` (fetch) | Ce fetch spécifique n'est jamais cache | — |
 | `next: { revalidate: N }` (fetch) | Ce fetch est cache N secondes | — |
 | `headers()` / `cookies()` | Route automatiquement dynamique | `private, no-cache, no-store` |
 | `unstable_cache()` | Cache serveur avec TTL et tags | — (cache interne) |
@@ -1291,13 +1293,13 @@ export default async function ProductPage({ params }) {
 
 ### Enonce
 
-Tu as un site e-commerce avec SSR. La page `/produit/42` est vue 100 000 fois par jour. Le rendu SSR prend 150ms. Le site supporte le francais et l'anglais, desktop et mobile.
+Tu as un site e-commerce avec SSR. La page `/produit/42` est vue 100 000 fois par jour. Le rendu SSR prend 150ms. Le site supporte le français et l'anglais, desktop et mobile.
 
 1. Combien de variantes de cache faut-il pour cette page ?
 2. Quel `Vary` header utiliser ?
-3. Calcule le temps CPU economise par jour si le cache SSR a un hit ratio de 95% avec un TTL de 5 minutes.
+3. Calcule le temps CPU economise par jour si le cache SSR à un hit ratio de 95% avec un TTL de 5 minutes.
 4. Ecris les headers `Cache-Control` optimaux pour le browser ET le CDN.
-5. La page affiche "Bonjour Alice" dans le header. Peut-on quand meme la cacher ? Comment ?
+5. La page affiche "Bonjour Alice" dans le header. Peut-on quand même la cacher ? Comment ?
 
 ### Reponse
 
@@ -1338,3 +1340,14 @@ Tu as un site e-commerce avec SSR. La page `/produit/42` est vue 100 000 fois pa
      Cache-Control: public pour le HTML,
      Cache-Control: private pour /api/user/greeting.
 ```
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 10 ssr](../screencasts/screencast-10-ssr.md)
+2. **Lab** : [lab-10-ssr-from-scratch](../labs/lab-10-ssr-from-scratch/README)
+3. **Visualisation** : [SSR & Hydration](../visualizations/ssr-hydration.html)
+4. **Quiz** : [quiz 10 ssr](../quizzes/quiz-10-ssr.html)
+:::

@@ -61,7 +61,7 @@ curl -v -X PUT -H "Content-Type: application/json" -d '{"name":"updated"}' http:
 curl -v -X DELETE http://localhost:3000/api/data/1
 ```
 
-> Chaque méthode a une sémantique particulière. GET pour lire, POST pour créer, PUT pour remplacer, DELETE pour supprimer. Et ce qui est important pour le cache : par défaut, seules les réponses GET sont mises en cache. On en reparlera.
+> Chaque méthode à une sémantique particulière. GET pour lire, POST pour créer, PUT pour remplacer, DELETE pour supprimer. Et ce qui est important pour le cache : par défaut, seules les réponses GET sont mises en cache. On en reparlera.
 
 ### [04:30-07:30] Anatomie d'une réponse HTTP
 

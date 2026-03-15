@@ -1309,7 +1309,7 @@ diagnose().catch(console.error);
 │  3. Séparer le cache navigateur du cache CDN.                │
 │     max-age pour le navigateur, s-maxage pour le CDN.        │
 │                                                               │
-│  4. Utiliser stale-while-revalidate partout où c'est         │
+│  4. Utiliser stale-while-revalidate partout ou c'est         │
 │     possible. Ça élimine les cache stampedes.                │
 │                                                               │
 │  5. Toujours ajouter un ETag ou Last-Modified.               │
@@ -1349,10 +1349,6 @@ diagnose().catch(console.error);
 
 ---
 
-## Lab associé
-
-→ `labs/15-projet-final/` — Déployer l'application complète, lancer les tests automatisés, optimiser jusqu'à obtenir un cache hit rate > 80% et un TTFB moyen < 100ms, puis démontrer une purge on-demand sans interruption de service.
-
 ---
 
 ## Pour aller plus loin
@@ -1361,7 +1357,7 @@ diagnose().catch(console.error);
 - [RFC 9111 — HTTP Caching](https://httpwg.org/specs/rfc9111.html)
 - [web.dev — HTTP cache](https://web.dev/http-cache/)
 - [Cloudflare Cache documentation](https://developers.cloudflare.com/cache/)
-- [Fastly VCL reference](https://developer.fastly.com/reference/vcl/)
+- [Fastly VCL référence](https://developer.fastly.com/reference/vcl/)
 - [Varnish Cache documentation](https://varnish-cache.org/docs/)
 
 ---
@@ -1487,3 +1483,24 @@ if (url.pathname === '/api/warmup' && req.method === 'POST') {
 ```
 
 </details>
+
+---
+
+<!-- parcours-recommande -->
+
+::: tip Parcours recommandé
+1. **Screencast** : [screencast 15 projet final](../screencasts/screencast-15-projet-final.md)
+2. **Lab** : [lab-15-full-architecture](../labs/lab-15-full-architecture/README)
+3. **Quiz** : [quiz 15 projet final](../quizzes/quiz-15-projet-final.html)
+:::
+
+---
+
+<!-- navigation-inter-cours -->
+
+::: info Cours suivant
+Bravo, tu as termine le cours **HTTP & Caching** ! 
+Le prochain cours du curriculum est **Architecture**.
+
+[Commencer Architecture →](../../10-architecture/cours/00-fondamentaux/01-quest-ce-que-architecture.md)
+:::

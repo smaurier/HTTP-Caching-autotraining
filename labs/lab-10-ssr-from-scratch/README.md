@@ -6,9 +6,9 @@
 - Comprendre le cycle : donnees → template → HTML complet
 - Implementer l'hydration avec `window.__INITIAL_STATE__`
 - Implementer le streaming SSR (envoi par morceaux)
-- Ajouter les headers de cache adaptes aux reponses SSR
+- Ajouter les headers de cache adaptes aux réponses SSR
 
-## Prerequis
+## Prérequis
 
 - Node.js 18+
 - Connaissance de `node:http`
@@ -21,16 +21,16 @@
    - **PARTIE 1** : Construire le SSR basique (template + donnees → HTML)
    - **PARTIE 2** : Ajouter le script d'hydration (`window.__INITIAL_STATE__`)
    - **PARTIE 3** : Implementer le streaming SSR (envoi par morceaux)
-   - **PARTIE 4** : Ajouter les headers Cache-Control aux reponses SSR
-3. Executer avec `node exercise.js`
-4. Verifier que tous les tests affichent ✅
+   - **PARTIE 4** : Ajouter les headers Cache-Control aux réponses SSR
+3. Exécuter avec `node exercise.js`
+4. Vérifier que tous les tests affichent ✅
 
 ## Ce qu'il faut observer
 
-- Le HTML genere contient les donnees pre-rendues (pas de chargement cote client)
+- Le HTML généré contient les donnees pre-rendues (pas de chargement cote client)
 - Le script d'hydration injecte les donnees dans `window.__INITIAL_STATE__`
 - En mode streaming, le HTML arrive en plusieurs morceaux (Transfer-Encoding: chunked)
-- Les headers Cache-Control different selon le type de page :
+- Les headers Cache-Control différent selon le type de page :
   - Pages publiques : `public, max-age=60, s-maxage=300`
   - Pages privees : `private, no-store`
   - Pages avec SWR : `public, max-age=10, stale-while-revalidate=50`

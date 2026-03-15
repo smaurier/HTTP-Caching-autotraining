@@ -30,7 +30,7 @@ Métrique Core Web Vitals qui mesure la stabilité visuelle d'une page. Un CLS �
 Requête HTTP qui inclut des en-têtes conditionnels (`If-None-Match`, `If-Modified-Since`) permettant au serveur de répondre 304 Not Modified si la ressource n'a pas changé, évitant de re-transférer le body.
 
 ### Content Negotiation {#content-negotiation}
-Mécanisme HTTP où le client indique ses préférences (format, langue, encoding) via les en-têtes `Accept-*`, et le serveur choisit la meilleure représentation de la ressource à envoyer.
+Mécanisme HTTP ou le client indique ses préférences (format, langue, encoding) via les en-têtes `Accept-*`, et le serveur choisit la meilleure représentation de la ressource à envoyer.
 
 ### CORS (Cross-Origin Resource Sharing) {#cors}
 Mécanisme de sécurité basé sur des en-têtes HTTP qui permet à un serveur d'indiquer quelles origines sont autorisées à accéder à ses ressources. Les requêtes cross-origin « complexes » déclenchent une requête preflight OPTIONS.
@@ -67,7 +67,7 @@ Algorithme de compression standard pour le web, identifié par `Content-Encoding
 ## H
 
 ### Head-of-Line Blocking {#head-of-line-blocking}
-Problème où une requête lente bloque toutes les requêtes qui suivent sur la même connexion. En HTTP/1.1, cela se produit au niveau applicatif. En HTTP/2, le problème persiste au niveau TCP. HTTP/3 (QUIC/UDP) résout ce problème.
+Problème ou une requête lente bloque toutes les requêtes qui suivent sur la même connexion. En HTTP/1.1, cela se produit au niveau applicatif. En HTTP/2, le problème persiste au niveau TCP. HTTP/3 (QUIC/UDP) résout ce problème.
 
 ### HPACK {#hpack}
 Algorithme de compression des en-têtes HTTP/2. Utilise une table statique et une table dynamique pour éviter de re-transmettre les en-têtes répétitifs entre requêtes, réduisant significativement l'overhead.
@@ -79,7 +79,7 @@ Version majeure du protocole HTTP introduisant le multiplexing (plusieurs requê
 Dernière version du protocole HTTP, basée sur QUIC (UDP) au lieu de TCP. Élimine le head-of-line blocking au niveau transport, supporte le 0-RTT connection establishment, et améliore la performance sur les réseaux instables.
 
 ### Hydration {#hydration}
-Processus côté client où JavaScript « réactive » le HTML statique reçu du serveur en attachant les event listeners et en synchronisant l'état. Le HTML devient interactif après l'hydration. L'« uncanny valley » est la période entre l'affichage et l'interactivité.
+Processus côté client ou JavaScript « réactive » le HTML statique reçu du serveur en attachant les event listeners et en synchronisant l'état. Le HTML devient interactif après l'hydration. L'« uncanny valley » est la période entre l'affichage et l'interactivité.
 
 ## I
 
@@ -112,7 +112,7 @@ Directive Cache-Control spécifiant la durée de vie (en secondes) d'une répons
 Cache du navigateur stocké en RAM. Extrêmement rapide mais volatile (disparaît à la fermeture de l'onglet). Utilisé pour les ressources récemment accédées ou preloadées.
 
 ### Multi-Layer Cache {#multi-layer-cache}
-Architecture de cache où plusieurs couches sont empilées : Browser → CDN → Reverse Proxy → Application → Base de données. Chaque couche réduit la charge sur la couche suivante.
+Architecture de cache ou plusieurs couches sont empilées : Browser → CDN → Reverse Proxy → Application → Base de données. Chaque couche réduit la charge sur la couche suivante.
 
 ### must-revalidate {#must-revalidate}
 Directive Cache-Control qui force le cache à revalider auprès du serveur une fois que la réponse est stale. Sans cette directive, le cache peut servir du contenu stale dans certaines conditions (ex: réseau indisponible).
@@ -131,7 +131,7 @@ Directive Cache-Control qui interdit réellement au cache de stocker la réponse
 ## O
 
 ### On-Demand Revalidation {#on-demand-revalidation}
-Mécanisme ISR où la régénération d'une page est déclenchée par un événement externe (webhook, API call) plutôt que par un timer. Permet une mise à jour ciblée et instantanée du contenu statique.
+Mécanisme ISR ou la régénération d'une page est déclenchée par un événement externe (webhook, API call) plutôt que par un timer. Permet une mise à jour ciblée et instantanée du contenu statique.
 
 ### Origin Server {#origin-server}
 Le serveur « source » qui génère le contenu original. Dans une architecture avec CDN, l'origin server est le serveur auquel le CDN fait appel quand il n'a pas la ressource en cache (cache miss).
@@ -157,7 +157,7 @@ Directive Cache-Control indiquant que la réponse est destinée à un seul utili
 Comme `must-revalidate`, mais s'applique uniquement aux caches partagés (CDN, proxy). Le cache navigateur peut servir du contenu stale, mais le proxy doit revalider.
 
 ### public {#public}
-Directive Cache-Control indiquant que la réponse peut être cachée par n'importe quel cache (navigateur, CDN, proxy). Nécessaire si la réponse a un status code normalement non-cacheable ou si l'on veut s'assurer que le CDN cache la ressource.
+Directive Cache-Control indiquant que la réponse peut être cachée par n'importe quel cache (navigateur, CDN, proxy). Nécessaire si la réponse à un status code normalement non-cacheable ou si l'on veut s'assurer que le CDN cache la ressource.
 
 ### Purge {#purge}
 Action d'invalider/supprimer du contenu dans un cache CDN. Peut se faire par URL exacte, par tag (surrogate key), ou globalement. Le soft purge marque le contenu comme stale sans le supprimer.
@@ -187,7 +187,7 @@ Composants React qui s'exécutent exclusivement sur le serveur. Ils n'envoient p
 Directive Cache-Control qui surcharge `max-age` uniquement pour les caches partagés (CDN, proxy). Permet de définir un TTL différent pour le CDN et pour le navigateur. Ex: `max-age=60, s-maxage=3600`.
 
 ### Server Push {#server-push}
-Fonctionnalité HTTP/2 permettant au serveur d'envoyer des ressources au client avant que celui-ci ne les demande. Peu utilisée en pratique car difficile à optimiser et souvent contre-productive.
+Fonctionnalité HTTP/2 permettant au serveur d'envoyer des ressources au client avant que celui-ci ne les demandé. Peu utilisée en pratique car difficile à optimiser et souvent contre-productive.
 
 ### Service Worker {#service-worker}
 Script JavaScript qui s'exécute en arrière-plan dans le navigateur, interceptant les requêtes réseau. Permet d'implémenter des stratégies de cache avancées (Cache-First, Network-First, SWR) et le fonctionnement offline.
@@ -198,11 +198,11 @@ Technique de purge CDN qui marque le contenu comme stale au lieu de le supprimer
 ### SSE (Server-Sent Events) {#sse}
 Protocole unidirectionnel (serveur → client) basé sur HTTP permettant au serveur d'envoyer un flux d'événements au navigateur. Plus simple que WebSocket pour les cas unidirectionnels. Utilise `text/event-stream`.
 
-### SSG (Static Site Generation) {#ssg}
-Pattern de rendering où les pages HTML sont générées au moment du build et servies comme fichiers statiques. Performances optimales (TTFB minimal) mais contenu figé jusqu'au prochain build.
+### SSG (Static Site Génération) {#ssg}
+Pattern de rendering ou les pages HTML sont générées au moment du build et servies comme fichiers statiques. Performances optimales (TTFB minimal) mais contenu figé jusqu'au prochain build.
 
 ### SSR (Server-Side Rendering) {#ssr}
-Pattern de rendering où le HTML est généré sur le serveur à chaque requête. Avantages : SEO, TTFB prévisible, contenu toujours frais. Inconvénients : charge serveur, hydration côté client nécessaire.
+Pattern de rendering ou le HTML est généré sur le serveur à chaque requête. Avantages : SEO, TTFB prévisible, contenu toujours frais. Inconvénients : charge serveur, hydration côté client nécessaire.
 
 ### SSR Token {#ssr-token}
 Marqueur dans le HTML rendu par le serveur qui transporte l'état initial de l'application vers le client. Typiquement `window.__INITIAL_STATE__ = {...}`. Évite au client de re-fetcher les données déjà récupérées par le serveur.
@@ -217,7 +217,7 @@ Directive Cache-Control permettant de servir une réponse stale si le serveur d'
 Directive Cache-Control qui permet de servir une réponse stale immédiatement tout en déclenchant une revalidation en arrière-plan. L'utilisateur actuel obtient la réponse stale rapide, le suivant obtient la version fraîche.
 
 ### Streaming SSR {#streaming-ssr}
-Technique SSR où le HTML est envoyé au client au fur et à mesure qu'il est généré, plutôt que d'attendre le rendu complet. Réduit le TTFB et permet au navigateur de commencer le parsing plus tôt.
+Technique SSR ou le HTML est envoyé au client au fur et à mesure qu'il est généré, plutôt que d'attendre le rendu complet. Réduit le TTFB et permet au navigateur de commencer le parsing plus tôt.
 
 ### Surrogate Key {#surrogate-key}
 Tag associé à une réponse cachée dans un CDN, permettant de purger un groupe de ressources partageant le même tag. Ex: purger toutes les pages liées à un produit en une seule opération.
@@ -250,4 +250,4 @@ Diagramme montrant le timing de chargement séquentiel de toutes les ressources 
 Initiative de Google définissant les métriques de qualité d'expérience utilisateur. Les Core Web Vitals (LCP, INP, CLS) sont utilisés comme facteur de ranking SEO.
 
 ### Write-Through Cache {#write-through}
-Pattern de cache où chaque écriture met à jour simultanément le cache et le storage persistant. Garantit la cohérence mais ajoute de la latence aux écritures. L'alternative est write-behind (écriture asynchrone au storage).
+Pattern de cache ou chaque écriture met à jour simultanément le cache et le storage persistant. Garantit la cohérence mais ajoute de la latence aux écritures. L'alternative est write-behind (écriture asynchrone au storage).
