@@ -5,6 +5,8 @@
 
 ---
 
+> **⚠️ Les modules 10, 11 et 12 passent en niveau expert.** C'est normal que ca soit plus difficile — SSR, ISR et Edge Rendering sont des sujets avances. Tu as toutes les bases (modules 00-09). Si un module te bloque, note ce que tu ne comprends pas et passe au suivant — ces concepts se clarifient quand tu les vois en pratique dans les cours Vue/React/Angular.
+
 ## 1. Pourquoi SSR ?
 
 ### 1.1 Le probleme du CSR (Client-Side Rendering)
