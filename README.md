@@ -77,3 +77,13 @@ node labs/lab-05-swr-implementation/exercise-step3.js
 ## Niveau
 
 **Débutant → Expert.** Ce cours part des bases HTTP et progresse jusqu'aux architectures cache avancées et au rendering au edge.
+
+
+## Lancer le cours
+
+```bash
+npm install          # une seule fois
+npm run docs:dev     # ouvre http://localhost:5173
+```
+
+Le site s'ouvre avec une sidebar navigable. Commence par le premier module (00).
