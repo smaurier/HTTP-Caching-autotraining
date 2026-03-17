@@ -968,6 +968,14 @@ server.listen(3000, () => {
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 02 — HTTP/2 & HTTP/3](./02-http2-http3.md) | [Module 04 — Cache-Control](./04-cache-control.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

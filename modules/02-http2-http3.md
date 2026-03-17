@@ -738,6 +738,323 @@ STRATEGIE DE FALLBACK DU NAVIGATEUR
 
 ---
 
+## 6. HTTP/3 en profondeur : QUIC, migration et 0-RTT
+
+### 6.1 QUIC : le protocole de transport reinvente
+
+QUIC n'est pas juste "TCP sur UDP". C'est un protocole de transport **complet** qui réinvente la couche transport avec les leçons apprises de 30 ans de TCP :
+
+```
+TCP : concu en 1981                     QUIC : concu en 2012-2021
+================================        ================================
+
+Fiabilité : oui                         Fiabilité : oui
+Ordre : global (tout le flux)           Ordre : par stream (independant)
+Chiffrement : non (ajouté via TLS)      Chiffrement : integre (TLS 1.3)
+Contrôle de flux : fenetre globale      Contrôle de flux : par stream + global
+Congestion : algorithmes anciens        Congestion : pluggable (Cubic, BBR)
+Handshake : 1-3 RTT                     Handshake : 1 RTT (0 en reconnexion)
+Identifiant : (IP, port) tuple          Identifiant : Connection ID (64 bits)
+Implemente dans : le kernel OS          Implemente dans : l'application (userspace)
+Evolution : quasi impossible            Evolution : rapide (pas besoin de MAJ kernel)
+```
+
+**Pourquoi UDP ?** QUIC utilise UDP comme couche de transport **minimale** pour pouvoir traverser les routeurs et pare-feux existants. Toute la logique de fiabilite, d'ordre et de controle de flux est reimplementee dans QUIC lui-meme, au-dessus d'UDP.
+
+```
+Un paquet QUIC sur le reseau :
++------------------+
+| UDP Header (8 B) |  ← Juste pour traverser les routeurs
++------------------+
+| QUIC Header      |  ← Connection ID, packet number
++------------------+
+| QUIC Frames      |  ← STREAM, ACK, CRYPTO, etc.
+| (chiffrees TLS)  |  ← Tout est chiffre sauf le header court
++------------------+
+
+Contrairement a TCP+TLS, meme les NUMEROS DE PAQUET sont chiffres.
+Un observateur sur le reseau ne peut pas voir :
+- Combien de streams sont ouverts
+- Quelles donnees sont retransmises
+- L'etat de la connexion
+```
+
+### 6.2 Le 0-RTT en detail
+
+Le 0-RTT est la fonctionnalite "magique" de QUIC : envoyer des donnees **des le premier paquet** lors d'une reconnexion :
+
+```
+PREMIERE CONNEXION (1-RTT)
+============================
+Client                              Serveur
+  |                                    |
+  |  Initial [CRYPTO: ClientHello]  →  |   Le client envoie ses parametres TLS
+  |                                    |
+  |  ← Initial [CRYPTO: ServerHello]   |   Le serveur repond avec ses parametres
+  |    + Handshake [certificat, fin]   |   + son certificat + cle de session
+  |                                    |
+  |  Handshake [fin] + 1-RTT [GET] →   |   Le client confirme + envoie sa requete
+  |                                    |
+  |  ← 1-RTT [200 OK + donnees]       |   Le serveur repond
+  |                                    |
+  Total : 1 RTT avant la premiere requete
+  Le serveur donne au client un "ticket de session" a reutiliser.
+
+
+RECONNEXION (0-RTT)
+=====================
+Client                              Serveur
+  |                                    |
+  |  Initial [CRYPTO: ClientHello     |
+  |    + ticket de session]           |   Le client presente son ancien ticket
+  |  + 0-RTT [GET /page.html]     →  |   + envoie sa requete immediatement !
+  |                                    |
+  |  ← Initial [ServerHello]          |   Le serveur valide le ticket
+  |  ← 1-RTT [200 OK + donnees]      |   et repond directement
+  |                                    |
+  Total : 0 RTT ! La requete part avec le premier paquet.
+```
+
+> **Attention securite** : les donnees 0-RTT ne sont pas protegees contre le **replay attack**. Un attaquant pourrait capturer le paquet 0-RTT et le renvoyer. C'est pourquoi le 0-RTT ne doit etre utilise que pour des requetes **idempotentes** (GET, pas POST).
+
+### 6.3 Migration de connexion : le changement de reseau transparent
+
+C'est l'un des avantages les plus concrets de QUIC pour les utilisateurs mobiles :
+
+```
+SCENARIO : Tu regardes une video YouTube sur ton telephone
+
+AVEC TCP (HTTP/2) :
+====================
+1. Tu es en WiFi a la maison
+   → Connexion TCP : (192.168.1.42:54321 → 142.250.x.x:443)
+
+2. Tu sors de chez toi, le WiFi se deconnecte
+   → L'IP change : 192.168.1.42 → 10.0.0.1 (4G)
+   → TCP : "cette connexion n'existe plus !" (IP source differente)
+   → Le navigateur doit :
+     a. Detecter la deconnexion (timeout ~30s)
+     b. Ouvrir une NOUVELLE connexion TCP (1 RTT)
+     c. Negocier TLS (1 RTT supplementaire)
+     d. Re-demander la ressource
+   → Resultat : interruption de 2-5 secondes, buffering video
+
+AVEC QUIC (HTTP/3) :
+=====================
+1. Tu es en WiFi a la maison
+   → Connexion QUIC : Connection ID = 0xABCD1234
+
+2. Tu sors de chez toi, le WiFi se deconnecte
+   → L'IP change : 192.168.1.42 → 10.0.0.1 (4G)
+   → QUIC : "meme Connection ID 0xABCD1234, je continue !"
+   → Le serveur reconnaît la connexion par son ID, pas par l'IP
+   → Resultat : transition transparente, pas de buffering
+```
+
+```
+Pourquoi ca marche ?
+
+TCP identifie une connexion par :
+  (IP source, Port source, IP destination, Port destination)
+  → Si l'IP change, la connexion est PERDUE
+
+QUIC identifie une connexion par :
+  Connection ID (nombre aleatoire de 64 bits)
+  → L'IP peut changer, le Connection ID reste le meme
+  → Le serveur sait que c'est le meme client
+```
+
+### 6.4 Multiplexage sans Head-of-Line blocking : pourquoi c'est si important
+
+HTTP/2 a resolu le HoL blocking au niveau HTTP, mais TCP ramene le probleme au niveau transport. Voici une comparaison concrete avec des chiffres :
+
+```
+Scenario : 3 streams, taux de perte de paquet = 2%
+
+HTTP/2 sur TCP :
+================
+Perte d'1 paquet sur le stream 2
+→ TCP bloque TOUT pendant la retransmission (~1 RTT = 50ms)
+→ Streams 1 et 3 sont bloques pour RIEN
+→ Impact : +50ms de latence sur TOUTES les ressources
+
+Impact reel mesure (Google, 2017) :
+  - Reseau Wi-Fi (0.1% perte) : HTTP/2 ≈ HTTP/3
+  - Reseau 4G (1-2% perte) : HTTP/3 est 5-15% plus rapide
+  - Reseau mauvais (5% perte) : HTTP/3 est 20-40% plus rapide
+  - Reseau tres mauvais (10% perte) : HTTP/2 devient PLUS LENT que HTTP/1.1 !
+    (car HTTP/1.1 ouvre 6 connexions TCP independantes)
+
+HTTP/3 sur QUIC :
+=================
+Perte d'1 paquet sur le stream 2
+→ QUIC retransmet UNIQUEMENT pour le stream 2
+→ Streams 1 et 3 continuent sans interruption
+→ Impact : +50ms sur le stream 2 seulement
+```
+
+### 6.5 Etat du deploiement HTTP/3 (2026)
+
+```
+ADOPTION HTTP/3 PAR LES SERVICES :
+====================================
+Cloudflare  : ✅ Active par defaut depuis 2022
+Google      : ✅ YouTube, Search, Gmail, Maps
+Facebook    : ✅ Toutes les apps
+Shopify     : ✅ Toutes les boutiques
+Fastly      : ✅ Support CDN
+Akamai      : ✅ Support CDN
+AWS (ALB)   : ✅ Depuis 2024
+Nginx       : ⚠️  Support experimental (via quiche ou ngtcp2)
+Apache      : ❌ Pas de support natif
+Caddy       : ✅ Support natif
+
+SUPPORT NAVIGATEURS :
+=======================
+Chrome      : ✅ Depuis Chrome 87 (2020)
+Firefox     : ✅ Depuis Firefox 88 (2021)
+Safari      : ✅ Depuis Safari 16 (2022)
+Edge        : ✅ (base Chromium)
+curl        : ✅ Depuis 7.66 (avec --http3)
+```
+
+---
+
+## 7. Compression HTTP : zstd, Brotli et gzip
+
+### 7.1 Pourquoi la compression compte pour le caching
+
+La compression reduit la taille des reponses HTTP, ce qui impacte directement :
+- **Le temps de transfert** : moins d'octets = plus rapide
+- **La taille du cache** : reponses plus petites = plus de ressources en cache
+- **La bande passante** : economies significatives sur mobile et connexions lentes
+
+### 7.2 Les trois algorithmes
+
+```
+GZIP (1992)                    BROTLI (2015)                 ZSTD (2015)
+============                   ==============                ============
+Le veteran.                    Le champion du web.           Le nouveau challenger.
+Supporte partout.              Meilleur ratio que gzip.      Ultra-rapide en
+                               Optimise pour le web          compression ET
+                               (dictionnaire HTML/CSS/JS).   decompression.
+
+Ratio moyen : ~70%            Ratio moyen : ~75-80%         Ratio moyen : ~75-80%
+Vitesse comp : rapide         Vitesse comp : lente a moyenne Vitesse comp : TRES rapide
+Vitesse decomp : rapide       Vitesse decomp : rapide       Vitesse decomp : TRES rapide
+```
+
+### 7.3 Comparaison detaillee
+
+| Critère | gzip | Brotli | zstd |
+|---------|------|--------|------|
+| **Ratio de compression** | ~70% | ~75-80% | ~75-80% |
+| **Vitesse compression** | Rapide | Lente (niveaux hauts) | Très rapide |
+| **Vitesse décompression** | Rapide | Rapide | Très rapide |
+| **Niveaux** | 1-9 | 1-11 | 1-22 |
+| **Header HTTP** | `Content-Encoding: gzip` | `Content-Encoding: br` | `Content-Encoding: zstd` |
+| **Accept-Encoding** | `gzip` | `br` | `zstd` |
+| **Support Chrome** | Depuis toujours | Depuis Chrome 49 (2016) | Depuis Chrome 123 (2024) |
+| **Support Firefox** | Depuis toujours | Depuis Firefox 44 (2016) | Depuis Firefox 126 (2024) |
+| **Support Safari** | Depuis toujours | Depuis Safari 11 (2017) | Depuis Safari 18 (2024) |
+| **Support Node.js** | `zlib` natif | `zlib.brotli*` natif | Via packages tiers |
+| **Cas d'usage ideal** | Compatibilité maximale | Assets statiques (CDN) | Streaming, logs, temps réel |
+
+### 7.4 Negociation de la compression
+
+```
+CLIENT → SERVEUR
+=================
+GET /app.js HTTP/2
+Accept-Encoding: zstd, br, gzip
+                  ^     ^   ^
+                  |     |   └─ Fallback : gzip (toujours supporte)
+                  |     └───── Prefere : brotli (meilleur ratio)
+                  └─────────── Meilleur : zstd (si disponible)
+
+Le serveur choisit le MEILLEUR algorithme supporte :
+1. Si le serveur supporte zstd → Content-Encoding: zstd
+2. Sinon si brotli → Content-Encoding: br
+3. Sinon → Content-Encoding: gzip
+
+SERVEUR → CLIENT
+=================
+HTTP/2 200 OK
+Content-Encoding: zstd
+Content-Type: application/javascript
+Vary: Accept-Encoding       ← IMPORTANT pour le cache !
+
+[donnees compressees en zstd]
+```
+
+> **Le header Vary** : `Vary: Accept-Encoding` indique aux caches intermediaires (CDN, proxy) qu'ils doivent stocker une version par algorithme de compression. Sans ce header, un CDN pourrait servir la version gzip a un client qui supporte brotli.
+
+### 7.5 Quand utiliser quel algorithme ?
+
+```
+Assets statiques (CSS, JS, HTML) servis par un CDN :
+→ BROTLI (niveau 11) — compresse une fois, sert des millions de fois
+  Le temps de compression ne compte pas, seul le ratio compte.
+
+Reponses API dynamiques (JSON) :
+→ ZSTD (niveau 3-5) — compression rapide, bon ratio
+  ou GZIP (niveau 6) si compatibilite maximale requise.
+
+Streaming de donnees (SSE, WebSocket, logs) :
+→ ZSTD (niveau 1-3) — le plus rapide en compression et decompression
+  Ideal pour les flux temps reel ou la latence est critique.
+
+Transferts entre services (microservices) :
+→ ZSTD (niveau 3) — meilleur compromis vitesse/ratio
+  Les navigateurs ne sont pas impliques, pas de souci de compatibilite.
+```
+
+### 7.6 Configuration serveur
+
+```typescript
+// Exemple avec un middleware Express pour gzip + brotli
+import compression from 'compression';
+import express from 'express';
+
+const app = express();
+
+// compression() gere automatiquement gzip et deflate
+// Pour brotli, utiliser shrink-ray-current ou iltorb
+app.use(compression({
+  level: 6,                          // Niveau gzip (1-9)
+  threshold: 1024,                   // Ne pas compresser < 1 Ko
+  filter: (req, res) => {
+    // Ne pas compresser les images (deja compressees)
+    if (res.getHeader('Content-Type')?.toString().startsWith('image/')) {
+      return false;
+    }
+    return compression.filter(req, res);
+  },
+}));
+```
+
+```nginx
+# Configuration Nginx pour gzip + brotli + zstd
+# gzip
+gzip on;
+gzip_comp_level 6;
+gzip_types text/plain text/css application/json application/javascript;
+gzip_min_length 1024;
+
+# brotli (module ngx_brotli)
+brotli on;
+brotli_comp_level 6;
+brotli_types text/plain text/css application/json application/javascript;
+brotli_min_length 1024;
+
+# zstd (module ngx_zstd — experimental en 2026)
+# zstd on;
+# zstd_comp_level 3;
+# zstd_types text/plain text/css application/json application/javascript;
+```
+
+---
+
 ## Points clés
 
 1. **HTTP/1.1** souffre du Head-of-Line blocking, de la limite de 6 connexions et des headers non compresses.
@@ -810,6 +1127,14 @@ Pour le cache, les trois versions utilisent **exactement les memes headers** (Ca
 La différence la plus visible est dans le **waterfall** : avec HTTP/2 et HTTP/3, les requêtes demarrent presque toutes en même temps, alors qu'en HTTP/1.1 elles sont echelonnees par lots de 6.
 
 </details>
+
+---
+
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 01 — Le protocole HTTP en profondeur](./01-protocole-http.md) | [Module 03 — Les en-tetes HTTP](./03-en-tetes-http.md) |
 
 ---
 

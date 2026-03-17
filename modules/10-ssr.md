@@ -1343,6 +1343,14 @@ Tu as un site e-commerce avec SSR. La page `/produit/42` est vue 100 000 fois pa
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 09 — Cache multi-couches](./09-cache-multi-couches.md) | [Module 11 — ISR & SSG](./11-isr-ssg.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

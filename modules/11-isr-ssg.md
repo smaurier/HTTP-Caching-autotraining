@@ -1033,6 +1033,14 @@ const product = await fetch(`https://api.example.com/products/${id}`, {
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 10 — SSR et Cache](./10-ssr.md) | [Module 12 — Edge Rendering](./12-edge-rendering.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

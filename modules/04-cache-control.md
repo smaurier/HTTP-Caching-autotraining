@@ -992,6 +992,14 @@ Apres expiration du max-age :
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 03 — Les en-tetes HTTP](./03-en-tetes-http.md) | [Module 05 — ETag & Validation conditionnelle](./05-etag-validation-conditionnelle.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

@@ -1026,6 +1026,14 @@ Le produit 42 passe en promotion (-50%). Decris **étape par étape** ce qui se 
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 08 — CDN](./08-cdn.md) | [Module 10 — SSR et Cache](./10-ssr.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

@@ -1116,6 +1116,14 @@ export default async function Dashboard() {
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 11 — ISR & SSG](./11-isr-ssg.md) | [Module 13 — HTTP Streaming](./13-http-streaming.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

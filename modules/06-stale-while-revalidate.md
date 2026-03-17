@@ -718,6 +718,14 @@ Ecris les headers `Cache-Control` optimaux pour chacun de ces cas :
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 05 — ETag & Validation conditionnelle](./05-etag-validation-conditionnelle.md) | [Module 07 — Cache navigateur](./07-cache-navigateur.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

@@ -1251,6 +1251,14 @@ server.listen(3000, () => {
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 13 — HTTP Streaming](./13-http-streaming.md) | [Module 15 — Projet final](./15-projet-final.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

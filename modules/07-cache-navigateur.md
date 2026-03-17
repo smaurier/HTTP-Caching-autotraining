@@ -862,6 +862,14 @@ Pour chaque ressource, indique :
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 06 — Stale-While-Revalidate & Stratégies de cache](./06-stale-while-revalidate.md) | [Module 08 — CDN](./08-cdn.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

@@ -1001,6 +1001,14 @@ server.listen(3000, () => console.log('http://localhost:3000'));
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 00 — Prérequis & Vue d'ensemble](./00-prerequis-et-vue-ensemble.md) | [Module 02 — HTTP/2 & HTTP/3](./02-http2-http3.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

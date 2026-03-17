@@ -1241,6 +1241,14 @@ server.listen(3000, () => {
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 12 — Edge Rendering](./12-edge-rendering.md) | [Module 14 — Performance Web](./14-performance-web.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

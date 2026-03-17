@@ -915,6 +915,14 @@ L'article 42 de l'auteur "alice" dans la categorie "tech" contient une erreur fa
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 07 — Cache navigateur](./07-cache-navigateur.md) | [Module 09 — Cache multi-couches](./09-cache-multi-couches.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé

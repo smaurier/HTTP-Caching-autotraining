@@ -1238,6 +1238,14 @@ server.listen(3000, () => console.log('http://localhost:3000'));
 
 ---
 
+## Navigation
+
+| Précédent | Suivant |
+|:---------:|:-------:|
+| [Module 04 — Cache-Control](./04-cache-control.md) | [Module 06 — Stale-While-Revalidate & Stratégies de cache](./06-stale-while-revalidate.md) |
+
+---
+
 <!-- parcours-recommande -->
 
 ::: tip Parcours recommandé
