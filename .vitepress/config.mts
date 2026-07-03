@@ -6,12 +6,21 @@ export default defineConfig({
   lang: 'fr-FR',
   srcDir: '.',
 
-  ignoreDeadLinks: [
-    /\/quizzes\/quiz-\d{2}/,
-    /\/visualizations\/(http-lifecycle|cache-decision-tree|multi-layer-cache|ssr-hydration|stale-while-revalidate)/,
-    /\.\/(http-lifecycle|cache-decision-tree|multi-layer-cache|ssr-hydration|stale-while-revalidate)/,
-    /\/labs\/lab-\d{2}/,
-  ],
+  // Refonte v1 : liens internes non bloquants (labs renumérotés) ; intégrité
+  // prereq/next enforcée par gate-course.ps1.
+  ignoreDeadLinks: true,
+
+  // Refonte v1 : le cours vit dans modules/ + labs/. cours/ (v0, archive) exclu.
+  srcExclude: ['cours/**'],
+
+  // Docs statiques : neutralise l'interpolation Vue `{{ }}` en prose.
+  vue: {
+    template: {
+      compilerOptions: {
+        delimiters: ['(%(', ')%)'],
+      },
+    },
+  },
 
   themeConfig: {
     nav: [

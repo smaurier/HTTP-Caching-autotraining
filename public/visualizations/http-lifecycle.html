@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cycle de vie HTTP complet anime</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column}
+  header{background:#16213e;padding:18px 30px;border-bottom:2px solid #0f3460;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  header h1{font-size:1.4rem;color:#e94560;letter-spacing:.5px}
+  .controls{display:flex;gap:8px;align-items:center}
+  .controls button{background:#0f3460;color:#e0e0e0;border:1px solid #e94560;padding:7px 18px;border-radius:6px;cursor:pointer;font-size:.85rem;transition:all .2s}
+  .controls button:hover{background:#e94560;color:#fff}
+  .controls button.active{background:#e94560;color:#fff}
+  .scenarios{display:flex;gap:8px;flex-wrap:wrap}
+  .scenarios button{background:#0f3460;color:#e0e0e0;border:1px solid #533483;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:.8rem;transition:all .2s}
+  .scenarios button:hover,.scenarios button.active{background:#533483;color:#fff}
+  .main{flex:1;display:flex;flex-direction:column;padding:20px 30px;gap:20px;overflow:auto}
+  .timeline-container{flex:1;min-height:320px;position:relative;background:#16213e;border-radius:12px;border:1px solid #0f3460;padding:30px 20px 20px;overflow:hidden}
+  .phase-labels{display:flex;justify-content:space-between;margin-bottom:0;position:relative;z-index:2}
+  .phase-label{text-align:center;width:14%;font-size:.72rem;color:#999;text-transform:uppercase;letter-spacing:.5px}
+  .timeline-track{position:relative;height:80px;margin:20px 0}
+  .track-line{position:absolute;top:50%;left:3%;right:3%;height:3px;background:#0f3460;border-radius:2px;transform:translateY(-50%)}
+  .track-progress{position:absolute;top:50%;left:3%;height:3px;background:linear-gradient(90deg,#e94560,#533483);border-radius:2px;transform:translateY(-50%);width:0;transition:width .5s ease}
+  .node{position:absolute;top:50%;width:44px;height:44px;border-radius:50%;background:#1a1a2e;border:3px solid #0f3460;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;font-size:1rem;transition:all .4s ease;z-index:3}
+  .node.active{border-color:#e94560;box-shadow:0 0 20px rgba(233,69,96,.5);background:#16213e}
+  .node.done{border-color:#4ecca3;background:#16213e;box-shadow:0 0 12px rgba(78,204,163,.3)}
+  .node.skipped{border-color:#555;opacity:.4}
+  .node .icon{font-size:1.1rem}
+  .arrow{position:absolute;top:50%;height:2px;background:#e94560;transform:translateY(-50%);transform-origin:left;opacity:0;transition:opacity .3s}
+  .arrow.visible{opacity:1}
+  .arrow::after{content:'';position:absolute;right:-6px;top:-4px;border:5px solid transparent;border-left:8px solid #e94560}
+  .packet{position:absolute;top:50%;width:12px;height:12px;border-radius:50%;transform:translate(-50%,-50%);z-index:5;opacity:0}
+  .packet.request{background:#e94560;box-shadow:0 0 10px rgba(233,69,96,.7)}
+  .packet.response{background:#4ecca3;box-shadow:0 0 10px rgba(78,204,163,.7)}
+  @keyframes packetMove{0%{opacity:1}100%{opacity:1}}
+  .timing-bar{display:flex;justify-content:space-between;margin:10px 0;padding:0 3%}
+  .timing-item{text-align:center;width:14%;font-size:.7rem}
+  .timing-item .time{color:#e94560;font-weight:600;font-size:.85rem}
+  .timing-item .label{color:#777;margin-top:2px}
+  .info-panel{background:#16213e;border-radius:12px;border:1px solid #0f3460;padding:20px 24px;min-height:140px;transition:all .3s}
+  .info-panel h3{color:#e94560;font-size:1rem;margin-bottom:8px}
+  .info-panel .step-title{color:#4ecca3;font-size:.95rem;margin-bottom:6px}
+  .info-panel .step-desc{color:#ccc;font-size:.88rem;line-height:1.6}
+  .info-panel .headers{background:#1a1a2e;border-radius:8px;padding:10px 14px;margin-top:10px;font-family:'Courier New',monospace;font-size:.78rem;color:#e94560;white-space:pre-wrap}
+  .total-time{text-align:center;padding:10px;font-size:1.1rem;color:#4ecca3;font-weight:600}
+  .legend{display:flex;gap:18px;justify-content:center;margin-top:8px;flex-wrap:wrap}
+  .legend-item{display:flex;align-items:center;gap:6px;font-size:.75rem;color:#999}
+  .legend-dot{width:10px;height:10px;border-radius:50%}
+</style>
+</head>
+<body>
+<header>
+  <h1>Cycle de vie HTTP complet</h1>
+  <div class="scenarios">
+    <button class="active" onclick="loadScenario(0)">1. Premiere visite</button>
+    <button onclick="loadScenario(1)">2. Revalidation 304</button>
+    <button onclick="loadScenario(2)">3. Cache direct</button>
+  </div>
+  <div class="controls">
+    <button onclick="play()" id="btnPlay">Lecture</button>
+    <button onclick="pause()" id="btnPause">Pause</button>
+    <button onclick="step()" id="btnStep">Etape</button>
+    <button onclick="reset()" id="btnReset">Reset</button>
+  </div>
+</header>
+<div class="main">
+  <div class="timeline-container">
+    <div class="phase-labels">
+      <div class="phase-label">Cache<br>local</div>
+      <div class="phase-label">DNS</div>
+      <div class="phase-label">TCP</div>
+      <div class="phase-label">TLS</div>
+      <div class="phase-label">Requete</div>
+      <div class="phase-label">Reponse</div>
+      <div class="phase-label">Decision<br>cache</div>
+    </div>
+    <div class="timeline-track" id="track">
+      <div class="track-line"></div>
+      <div class="track-progress" id="trackProgress"></div>
+    </div>
+    <div class="timing-bar" id="timingBar"></div>
+    <div class="total-time" id="totalTime"></div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#e94560"></div> Requete</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#4ecca3"></div> Reponse/OK</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#555"></div> Ignore</div>
+    </div>
+  </div>
+  <div class="info-panel" id="infoPanel">
+    <h3>Explication</h3>
+    <div class="step-title" id="stepTitle">Selectionnez un scenario et appuyez sur Lecture</div>
+    <div class="step-desc" id="stepDesc">Cette visualisation montre le cycle de vie complet d'une requete HTTP, de la resolution DNS jusqu'a la decision de mise en cache. Chaque phase est animee avec son temps de latence typique.</div>
+  </div>
+</div>
+<script>
+const phases = ['cache','dns','tcp','tls','request','response','cacheDecision'];
+const icons = ['\u{1F4E6}','\u{1F310}','\u{1F50C}','\u{1F512}','\u{1F4E4}','\u{1F4E5}','\u{1F4CB}'];
+const positions = [7,21.3,35.6,50,64.3,78.6,93];
+
+const scenarios = [
+  {
+    name:"Premiere visite (cache froid)",
+    steps:[
+      {phase:0,time:'0ms',status:'active',title:"Verification du cache local",desc:"Le navigateur verifie son cache local. Aucune entree trouvee pour cette URL.\nC'est la premiere visite : le cache est vide (cold cache).",headers:"Cache: MISS\nAucune entree en cache pour GET /api/data"},
+      {phase:1,time:'~20ms',status:'active',title:"Resolution DNS",desc:"Le navigateur interroge le serveur DNS pour obtenir l'adresse IP du domaine.\nLe resolveur DNS peut consulter plusieurs niveaux : cache local, FAI, serveur racine, serveur autoritaire.",headers:"DNS Query: api.exemple.fr\nDNS Response: 93.184.216.34\nTTL: 300s"},
+      {phase:2,time:'~50ms',status:'active',title:"Handshake TCP (3-way)",desc:"Etablissement de la connexion TCP via le three-way handshake :\n1. SYN -> (client vers serveur)\n2. SYN-ACK <- (serveur vers client)\n3. ACK -> (client vers serveur)\nLa connexion est maintenant etablie.",headers:"SYN  -> seq=0\nSYN-ACK <- seq=0, ack=1\nACK  -> seq=1, ack=1"},
+      {phase:3,time:'~80ms',status:'active',title:"Negociation TLS 1.3",desc:"Negociation du protocole de securite TLS 1.3 :\n- Echange de cles (ECDHE)\n- Verification du certificat serveur\n- Etablissement du canal chiffre\nAvec TLS 1.3, seulement 1 aller-retour necessaire (1-RTT).",headers:"ClientHello: TLS 1.3, ECDHE\nServerHello: cert=*.exemple.fr\nFinished: cle symetrique etablie"},
+      {phase:4,time:'~100ms',status:'active',title:"Envoi de la requete HTTP",desc:"Le navigateur envoie la requete HTTP sur le canal securise.\nAucun en-tete conditionnel car c'est la premiere visite.",headers:"GET /api/data HTTP/2\nHost: api.exemple.fr\nAccept: application/json\nUser-Agent: Mozilla/5.0"},
+      {phase:5,time:'~250ms',status:'active',title:"Reception de la reponse",desc:"Le serveur traite la requete et renvoie la reponse complete.\nLa reponse inclut des en-tetes de cache pour les futures visites.",headers:"HTTP/2 200 OK\nContent-Type: application/json\nCache-Control: max-age=3600\nETag: \"abc123\"\nContent-Length: 2048"},
+      {phase:6,time:'~260ms',status:'active',title:"Decision de mise en cache",desc:"Le navigateur analyse les en-tetes Cache-Control :\n- max-age=3600 : la reponse est fraiche pendant 1 heure\n- ETag present : permettra la revalidation future\nLa reponse est stockee dans le cache du navigateur.",headers:"Cache-Control: max-age=3600\n=> Stocker en cache\n=> Fraicheur: 1h\n=> ETag: \"abc123\" (pour revalidation)"}
+    ],
+    timings:['0ms','20ms','50ms','80ms','100ms','250ms','260ms'],
+    total:'Temps total : ~260ms'
+  },
+  {
+    name:"Retour avec revalidation 304",
+    steps:[
+      {phase:0,time:'0ms',status:'active',title:"Verification du cache local",desc:"Le navigateur trouve une entree en cache pour cette URL.\nMais l'entree a expire (max-age depasse).\nIl faut revalider aupres du serveur.",headers:"Cache: STALE (expire)\nETag stocke: \"abc123\"\nmax-age=3600 depasse de 120s"},
+      {phase:1,time:'~0ms',status:'skipped',title:"DNS (cache DNS)",desc:"L'adresse IP est encore dans le cache DNS du systeme.\nPas besoin de refaire la resolution DNS.",headers:"DNS Cache HIT\napi.exemple.fr -> 93.184.216.34"},
+      {phase:2,time:'~0ms',status:'skipped',title:"TCP (connexion reutilisee)",desc:"La connexion TCP est reutilisee grace au keep-alive HTTP/2.\nPas besoin de refaire le handshake.",headers:"Connection: keep-alive\nHTTP/2 multiplex actif"},
+      {phase:3,time:'~0ms',status:'skipped',title:"TLS (session reprise)",desc:"La session TLS est reprise grace au mecanisme de tickets de session.\nPas besoin de renvoyer le certificat.",headers:"TLS Session Resumption\n0-RTT (TLS 1.3)"},
+      {phase:4,time:'~5ms',status:'active',title:"Requete conditionnelle",desc:"Le navigateur envoie une requete conditionnelle avec l'en-tete If-None-Match.\nCela permet au serveur de verifier si la ressource a change sans renvoyer le corps.",headers:"GET /api/data HTTP/2\nHost: api.exemple.fr\nIf-None-Match: \"abc123\"\nAccept: application/json"},
+      {phase:5,time:'~30ms',status:'active',title:"Reponse 304 Not Modified",desc:"Le serveur compare l'ETag et confirme que la ressource n'a pas change.\nIl renvoie un 304 sans corps, economisant la bande passante.\nLe navigateur utilise la copie en cache.",headers:"HTTP/2 304 Not Modified\nETag: \"abc123\"\nCache-Control: max-age=3600\nContent-Length: 0"},
+      {phase:6,time:'~35ms',status:'active',title:"Rafraichissement du cache",desc:"Le cache local est mis a jour avec une nouvelle date d'expiration.\nLa reponse en cache reste valide pour 1 heure de plus.\nEconomie significative : 0 octet de corps transfere !",headers:"Cache mis a jour:\n=> Nouvelle fraicheur: 3600s\n=> Corps: reutilise depuis le cache\n=> Bande passante economisee: ~2 Ko"}
+    ],
+    timings:['0ms','skip','skip','skip','5ms','30ms','35ms'],
+    total:'Temps total : ~35ms (vs 260ms premiere visite)'
+  },
+  {
+    name:"Reponse directe depuis le cache",
+    steps:[
+      {phase:0,time:'0ms',status:'active',title:"Cache HIT - Reponse immediate",desc:"Le navigateur trouve une entree en cache FRAICHE pour cette URL.\nmax-age n'est pas encore depasse : la reponse est servie instantanement depuis le cache.\nAucune requete reseau necessaire !",headers:"Cache: HIT (frais)\nAge: 1200s (sur 3600s)\nRestant: 2400s de fraicheur"},
+      {phase:1,time:'-',status:'skipped',title:"DNS - Ignore",desc:"Aucune resolution DNS necessaire.\nLa reponse est servie directement depuis le cache du navigateur.",headers:"(aucun reseau)"},
+      {phase:2,time:'-',status:'skipped',title:"TCP - Ignore",desc:"Aucune connexion TCP necessaire.",headers:"(aucun reseau)"},
+      {phase:3,time:'-',status:'skipped',title:"TLS - Ignore",desc:"Aucune negociation TLS necessaire.",headers:"(aucun reseau)"},
+      {phase:4,time:'-',status:'skipped',title:"Requete - Ignore",desc:"Aucune requete HTTP envoyee.",headers:"(aucun reseau)"},
+      {phase:5,time:'-',status:'skipped',title:"Reponse - du cache",desc:"La reponse est lue directement depuis le cache disque/memoire du navigateur.\nTemps d'acces quasi-instantane.",headers:"(from disk cache)\nHTTP/2 200 OK\nContent-Type: application/json\nAge: 1200"},
+      {phase:6,time:'~1ms',status:'active',title:"Cache valide - Aucune action",desc:"Le cache est encore frais, aucune action necessaire.\nLa reponse est servie en moins de 1ms.\n\nC'est le scenario ideal : zero latence reseau, zero bande passante consommee.",headers:"Cache-Control: max-age=3600\nAge: 1200s\n=> Encore frais pour 2400s\n=> Performance optimale !"}
+    ],
+    timings:['0ms','-','-','-','-','-','~1ms'],
+    total:'Temps total : ~1ms (cache direct, aucun reseau)'
+  }
+];
+
+let currentScenario = 0;
+let currentStep = -1;
+let playing = false;
+let playTimer = null;
+let nodes = [];
+
+function buildTimeline(){
+  const track = document.getElementById('track');
+  track.querySelectorAll('.node').forEach(n=>n.remove());
+  nodes = [];
+  positions.forEach((pos,i)=>{
+    const node = document.createElement('div');
+    node.className = 'node';
+    node.style.left = pos+'%';
+    node.innerHTML = `<span class="icon">${icons[i]}</span>`;
+    node.onclick = ()=> goToStep(i);
+    track.appendChild(node);
+    nodes.push(node);
+  });
+}
+
+function updateTimings(){
+  const s = scenarios[currentScenario];
+  const bar = document.getElementById('timingBar');
+  bar.innerHTML = '';
+  s.timings.forEach((t,i)=>{
+    const d = document.createElement('div');
+    d.className = 'timing-item';
+    d.innerHTML = `<div class="time">${t}</div><div class="label">${phases[i]}</div>`;
+    bar.appendChild(d);
+  });
+  document.getElementById('totalTime').textContent = s.total;
+}
+
+function loadScenario(idx){
+  currentScenario = idx;
+  document.querySelectorAll('.scenarios button').forEach((b,i)=>b.classList.toggle('active',i===idx));
+  reset();
+  updateTimings();
+}
+
+function reset(){
+  pause();
+  currentStep = -1;
+  nodes.forEach(n=>{n.className='node';});
+  document.getElementById('trackProgress').style.width='0%';
+  document.getElementById('stepTitle').textContent = scenarios[currentScenario].name;
+  document.getElementById('stepDesc').textContent = 'Appuyez sur Lecture ou Etape pour demarrer l\'animation.';
+  document.querySelector('.info-panel .headers')?.remove();
+}
+
+function goToStep(idx){
+  const s = scenarios[currentScenario];
+  if(idx<0||idx>=s.steps.length) return;
+  currentStep = idx;
+  const st = s.steps[idx];
+  nodes.forEach((n,i)=>{
+    if(i<idx) n.className = 'node ' + (s.steps[i].status==='skipped'?'skipped':'done');
+    else if(i===idx) n.className = 'node ' + st.status;
+    else n.className = 'node';
+  });
+  const pct = positions[idx] - 4;
+  document.getElementById('trackProgress').style.width = Math.max(0,pct)+'%';
+  document.getElementById('stepTitle').textContent = st.title + ' (' + st.time + ')';
+  document.getElementById('stepDesc').textContent = st.desc;
+  let hp = document.querySelector('.info-panel .headers');
+  if(!hp){hp=document.createElement('div');hp.className='headers';document.getElementById('infoPanel').appendChild(hp);}
+  hp.textContent = st.headers;
+}
+
+function step(){
+  const s = scenarios[currentScenario];
+  if(currentStep < s.steps.length-1){
+    goToStep(currentStep+1);
+  }
+}
+
+function play(){
+  if(playing) return;
+  playing = true;
+  document.getElementById('btnPlay').classList.add('active');
+  const doStep = ()=>{
+    const s = scenarios[currentScenario];
+    if(currentStep < s.steps.length-1){
+      step();
+      playTimer = setTimeout(doStep, 1200);
+    } else {
+      playing = false;
+      document.getElementById('btnPlay').classList.remove('active');
+    }
+  };
+  doStep();
+}
+
+function pause(){
+  playing = false;
+  clearTimeout(playTimer);
+  document.getElementById('btnPlay').classList.remove('active');
+}
+
+buildTimeline();
+updateTimings();
+loadScenario(0);
+</script>
+</body>
+</html>

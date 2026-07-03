@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cache multi-couches anime</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column}
+  header{background:#16213e;padding:18px 30px;border-bottom:2px solid #0f3460;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  header h1{font-size:1.4rem;color:#e94560;letter-spacing:.5px}
+  .controls{display:flex;gap:8px}
+  .controls button{background:#0f3460;color:#e0e0e0;border:1px solid #e94560;padding:7px 18px;border-radius:6px;cursor:pointer;font-size:.85rem;transition:all .2s}
+  .controls button:hover{background:#e94560;color:#fff}
+  .controls button.active{background:#e94560;color:#fff}
+  .scenarios{display:flex;gap:8px;flex-wrap:wrap}
+  .scenarios button{background:#0f3460;color:#e0e0e0;border:1px solid #533483;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:.8rem;transition:all .2s}
+  .scenarios button:hover,.scenarios button.active{background:#533483;color:#fff}
+  .main{flex:1;display:flex;flex-direction:column;padding:20px 30px;gap:20px;overflow:auto}
+  .viz-area{flex:1;display:flex;gap:0;background:#16213e;border-radius:12px;border:1px solid #0f3460;overflow:hidden;min-height:420px;position:relative}
+  .layer{flex:1;display:flex;flex-direction:column;align-items:center;padding:20px 10px;position:relative;border-right:1px dashed #0f3460}
+  .layer:last-child{border-right:none}
+  .layer-title{font-size:1rem;font-weight:700;margin-bottom:6px;letter-spacing:.5px}
+  .layer-subtitle{font-size:.72rem;color:#888;margin-bottom:16px}
+  .layer-icon{font-size:3rem;margin-bottom:12px;opacity:.7}
+  .cache-box{width:90%;max-width:200px;background:#1a1a2e;border:2px solid #333;border-radius:10px;padding:14px;text-align:center;transition:all .5s;min-height:100px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:6px}
+  .cache-box.hit{border-color:#4ecca3;box-shadow:0 0 25px rgba(78,204,163,.35)}
+  .cache-box.miss{border-color:#e94560;box-shadow:0 0 25px rgba(233,69,96,.35)}
+  .cache-box.stale{border-color:#f0a030;box-shadow:0 0 25px rgba(240,160,48,.35)}
+  .cache-box.idle{border-color:#333}
+  .cache-status{font-size:.95rem;font-weight:700;letter-spacing:.5px}
+  .cache-status.hit{color:#4ecca3}
+  .cache-status.miss{color:#e94560}
+  .cache-status.stale{color:#f0a030}
+  .cache-detail{font-size:.75rem;color:#999}
+  .cache-time{font-size:1.3rem;font-weight:700;color:#e94560;margin-top:4px}
+  /* Arrows */
+  .arrow-container{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10}
+  .arrow-svg{width:100%;height:100%}
+  .packet-dot{r:8;opacity:0}
+  .packet-dot.request{fill:#e94560}
+  .packet-dot.response{fill:#4ecca3}
+  @keyframes moveRight{0%{opacity:1}100%{opacity:1}}
+  .arrow-line{stroke:#333;stroke-width:2;stroke-dasharray:8 4;fill:none}
+  .arrow-line.active-req{stroke:#e94560;stroke-width:3;stroke-dasharray:none;filter:drop-shadow(0 0 4px rgba(233,69,96,.5))}
+  .arrow-line.active-res{stroke:#4ecca3;stroke-width:3;stroke-dasharray:none;filter:drop-shadow(0 0 4px rgba(78,204,163,.5))}
+  /* Info panel */
+  .info-panel{background:#16213e;border-radius:12px;border:1px solid #0f3460;padding:20px 24px;min-height:140px}
+  .info-panel h3{color:#e94560;margin-bottom:8px;font-size:1rem}
+  .info-panel .step-title{color:#4ecca3;margin-bottom:6px;font-size:.95rem}
+  .info-panel .step-desc{color:#ccc;font-size:.88rem;line-height:1.6;white-space:pre-wrap}
+  .info-panel .headers{background:#1a1a2e;border-radius:8px;padding:10px 14px;margin-top:10px;font-family:'Courier New',monospace;font-size:.78rem;color:#e94560;white-space:pre-wrap}
+  .latency-bar{display:flex;align-items:center;gap:12px;padding:10px 0;justify-content:center}
+  .latency-bar .label{font-size:.85rem;color:#999}
+  .latency-bar .bar{flex:1;max-width:400px;height:8px;background:#0f3460;border-radius:4px;overflow:hidden}
+  .latency-bar .fill{height:100%;border-radius:4px;transition:width .8s ease,background .5s}
+  .legend{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;font-size:.75rem;color:#999}
+  .legend span{display:flex;align-items:center;gap:4px}
+  .legend .dot{width:10px;height:10px;border-radius:50%}
+</style>
+</head>
+<body>
+<header>
+  <h1>Cache multi-couches</h1>
+  <div class="scenarios">
+    <button class="active" onclick="loadScenario(0)">1. Browser HIT</button>
+    <button onclick="loadScenario(1)">2. CDN HIT</button>
+    <button onclick="loadScenario(2)">3. Full MISS</button>
+  </div>
+  <div class="controls">
+    <button onclick="play()" id="btnPlay">Lecture</button>
+    <button onclick="doPause()" id="btnPause">Pause</button>
+    <button onclick="doStep()" id="btnStep">Etape</button>
+    <button onclick="doReset()" id="btnReset">Reset</button>
+  </div>
+</header>
+<div class="main">
+  <div class="viz-area" id="vizArea">
+    <div class="layer" id="layerBrowser">
+      <div class="layer-icon">&#x1F4BB;</div>
+      <div class="layer-title" style="color:#4ecca3">Navigateur</div>
+      <div class="layer-subtitle">Cache local (disque/memoire)</div>
+      <div class="cache-box idle" id="boxBrowser">
+        <div class="cache-status" id="statusBrowser">En attente</div>
+        <div class="cache-detail" id="detailBrowser">-</div>
+        <div class="cache-time" id="timeBrowser"></div>
+      </div>
+    </div>
+    <div class="layer" id="layerCDN">
+      <div class="layer-icon">&#x1F310;</div>
+      <div class="layer-title" style="color:#f0a030">CDN</div>
+      <div class="layer-subtitle">Cache edge (Cloudflare, Akamai...)</div>
+      <div class="cache-box idle" id="boxCDN">
+        <div class="cache-status" id="statusCDN">En attente</div>
+        <div class="cache-detail" id="detailCDN">-</div>
+        <div class="cache-time" id="timeCDN"></div>
+      </div>
+    </div>
+    <div class="layer" id="layerOrigin">
+      <div class="layer-icon">&#x1F5A5;&#xFE0F;</div>
+      <div class="layer-title" style="color:#e94560">Origine</div>
+      <div class="layer-subtitle">Serveur d'application</div>
+      <div class="cache-box idle" id="boxOrigin">
+        <div class="cache-status" id="statusOrigin">En attente</div>
+        <div class="cache-detail" id="detailOrigin">-</div>
+        <div class="cache-time" id="timeOrigin"></div>
+      </div>
+    </div>
+    <div class="arrow-container">
+      <svg class="arrow-svg" id="arrowSvg">
+        <!-- Drawn dynamically -->
+      </svg>
+    </div>
+  </div>
+  <div class="latency-bar">
+    <span class="label">Latence totale :</span>
+    <div class="bar"><div class="fill" id="latencyFill" style="width:0;background:#4ecca3"></div></div>
+    <span class="label" id="latencyValue">0 ms</span>
+  </div>
+  <div class="legend">
+    <span><div class="dot" style="background:#4ecca3"></div> HIT (cache present)</span>
+    <span><div class="dot" style="background:#e94560"></div> MISS (cache absent)</span>
+    <span><div class="dot" style="background:#f0a030"></div> STALE (perime)</span>
+  </div>
+  <div class="info-panel" id="infoPanel">
+    <h3>Explication</h3>
+    <div class="step-title" id="stepTitle">Cache multi-couches</div>
+    <div class="step-desc" id="stepDesc">Cette visualisation montre comment une requete HTTP traverse les differentes couches de cache. Chaque couche peut intercepter la requete si elle possede une copie valide de la ressource.</div>
+    <div class="headers" id="headersBlock" style="display:none"></div>
+  </div>
+</div>
+<script>
+const scenarios = [
+  {
+    name:"Cache navigateur HIT (instantane)",
+    steps:[
+      {browser:{cls:'idle',status:'Verification...',detail:'Recherche en cache local',time:''},cdn:{cls:'idle',status:'En attente',detail:'-',time:''},origin:{cls:'idle',status:'En attente',detail:'-',time:''},arrow:null,latency:0,title:"Le navigateur verifie son cache local",desc:"Une requete est initiee pour GET /api/data.\nLe navigateur verifie d'abord s'il possede une copie en cache.",headers:"GET /api/data HTTP/2\nHost: api.exemple.fr"},
+      {browser:{cls:'hit',status:'HIT',detail:'Cache frais (age: 120s / max-age: 3600s)',time:'< 1ms'},cdn:{cls:'idle',status:'Non sollicite',detail:'Requete interceptee',time:'-'},origin:{cls:'idle',status:'Non sollicite',detail:'Requete interceptee',time:'-'},arrow:null,latency:1,title:"HIT ! Reponse directe du cache navigateur",desc:"Le navigateur possede une copie fraiche de la ressource.\nmax-age=3600 et la copie n'a que 120 secondes.\nLa reponse est servie instantanement sans aucune requete reseau.\n\nNi le CDN ni le serveur d'origine ne sont sollicites.",headers:"200 OK (from disk cache)\nCache-Control: max-age=3600\nAge: 120\nTemps: < 1ms\nReseau: 0 octets transferes"}
+    ],maxLatency:300
+  },
+  {
+    name:"CDN HIT (navigateur MISS)",
+    steps:[
+      {browser:{cls:'idle',status:'Verification...',detail:'Recherche en cache local',time:''},cdn:{cls:'idle',status:'En attente',detail:'-',time:''},origin:{cls:'idle',status:'En attente',detail:'-',time:''},arrow:null,latency:0,title:"Le navigateur verifie son cache local",desc:"Le navigateur cherche la ressource dans son cache local.",headers:"GET /api/data HTTP/2"},
+      {browser:{cls:'miss',status:'MISS',detail:'Aucune entree en cache',time:'0ms'},cdn:{cls:'idle',status:'En attente',detail:'-',time:''},origin:{cls:'idle',status:'En attente',detail:'-',time:''},arrow:'req-b-c',latency:0,title:"MISS navigateur - requete envoyee au CDN",desc:"Le cache local est vide pour cette ressource.\nLa requete est transmise au CDN le plus proche geographiquement.",headers:"GET /api/data HTTP/2\n=> Forward to CDN edge"},
+      {browser:{cls:'miss',status:'MISS',detail:'En attente de reponse',time:''},cdn:{cls:'idle',status:'Verification...',detail:'Recherche dans le cache edge',time:''},origin:{cls:'idle',status:'En attente',detail:'-',time:''},arrow:null,latency:10,title:"Le CDN verifie son cache edge",desc:"Le serveur CDN (edge) le plus proche recoit la requete.\nIl verifie s'il possede une copie en cache de la ressource.",headers:"CDN Edge: Paris-01\nRecherche en cache edge..."},
+      {browser:{cls:'miss',status:'MISS',detail:'En attente de reponse',time:''},cdn:{cls:'hit',status:'HIT',detail:'Cache frais (age: 45s / max-age: 300s)',time:'~15ms'},origin:{cls:'idle',status:'Non sollicite',detail:'Requete interceptee',time:'-'},arrow:'res-c-b',latency:15,title:"HIT CDN ! Reponse depuis le cache edge",desc:"Le CDN possede une copie fraiche de la ressource !\nLa reponse est renvoyee au navigateur sans contacter le serveur d'origine.\n\nLatence tres faible car le CDN est geographiquement proche.",headers:"HTTP/2 200 OK\nCache-Control: max-age=300\nAge: 45\nX-Cache: HIT\nCf-Cache-Status: HIT\nServer: cloudflare"},
+      {browser:{cls:'hit',status:'RECU',detail:'Reponse du CDN stockee en cache',time:'~15ms'},cdn:{cls:'hit',status:'HIT',detail:'Cache frais',time:'~15ms'},origin:{cls:'idle',status:'Non sollicite',detail:'-',time:'-'},arrow:null,latency:15,title:"Reponse recue et mise en cache par le navigateur",desc:"Le navigateur recoit la reponse du CDN et la stocke dans son cache local.\nLes prochaines requetes seront servies directement depuis le cache du navigateur (scenario 1).\n\nGain considerable par rapport a un appel au serveur d'origine.",headers:"Stockage en cache local:\nCache-Control: max-age=300\nETag: \"v42\"\nTemps total: ~15ms"}
+    ],maxLatency:300
+  },
+  {
+    name:"Full MISS (toutes couches)",
+    steps:[
+      {browser:{cls:'idle',status:'Verification...',detail:'Recherche en cache local',time:''},cdn:{cls:'idle',status:'En attente',detail:'-',time:''},origin:{cls:'idle',status:'En attente',detail:'-',time:''},arrow:null,latency:0,title:"Le navigateur verifie son cache local",desc:"Le navigateur cherche la ressource dans son cache local.",headers:"GET /api/data HTTP/2"},
+      {browser:{cls:'miss',status:'MISS',detail:'Aucune entree',time:'0ms'},cdn:{cls:'idle',status:'En attente',detail:'-',time:''},origin:{cls:'idle',status:'En attente',detail:'-',time:''},arrow:'req-b-c',latency:0,title:"MISS navigateur - requete vers le CDN",desc:"Le cache local est vide. La requete est transmise au CDN.",headers:"GET /api/data HTTP/2\n=> Forward to CDN"},
+      {browser:{cls:'miss',status:'MISS',detail:'Attente...',time:''},cdn:{cls:'idle',status:'Verification...',detail:'Recherche en cache edge',time:''},origin:{cls:'idle',status:'En attente',detail:'-',time:''},arrow:null,latency:10,title:"Le CDN verifie son cache edge",desc:"Le CDN cherche dans son cache edge...",headers:"CDN Edge: Paris-01\nRecherche..."},
+      {browser:{cls:'miss',status:'MISS',detail:'Attente...',time:''},cdn:{cls:'miss',status:'MISS',detail:'Aucune entree en cache',time:'~10ms'},origin:{cls:'idle',status:'En attente',detail:'-',time:''},arrow:'req-c-o',latency:10,title:"MISS CDN - requete transmise a l'origine",desc:"Le CDN ne possede pas de copie en cache.\nLa requete est transmise au serveur d'origine.\nCette transmission peut traverser plusieurs reseaux et ajoute de la latence.",headers:"GET /api/data HTTP/2\nX-Forwarded-For: 86.20.xx.xx\n=> Forward to Origin"},
+      {browser:{cls:'miss',status:'MISS',detail:'Attente...',time:''},cdn:{cls:'miss',status:'MISS',detail:'Attente reponse origine...',time:''},origin:{cls:'idle',status:'Traitement...',detail:'Requete SQL, logique metier...',time:''},arrow:null,latency:80,title:"Le serveur d'origine traite la requete",desc:"Le serveur d'origine recoit la requete.\nIl execute la logique metier : requetes base de donnees, calculs, serialisation JSON...\nC'est souvent la phase la plus longue.",headers:"SQL: SELECT * FROM data WHERE ...\nTraitement: 120ms\nSerialisation JSON: 10ms"},
+      {browser:{cls:'miss',status:'MISS',detail:'Attente...',time:''},cdn:{cls:'miss',status:'MISS',detail:'Attente...',time:''},origin:{cls:'hit',status:'200 OK',detail:'Reponse generee (2.4 Ko)',time:'~200ms'},arrow:'res-o-c',latency:200,title:"Reponse du serveur d'origine",desc:"Le serveur renvoie la reponse complete avec les en-tetes de cache.\nLa reponse traverse le reseau vers le CDN.",headers:"HTTP/2 200 OK\nContent-Type: application/json\nCache-Control: max-age=300\nETag: \"v42\"\nContent-Length: 2400"},
+      {browser:{cls:'miss',status:'MISS',detail:'Attente...',time:''},cdn:{cls:'hit',status:'STOCKE',detail:'Reponse mise en cache edge',time:'~220ms'},origin:{cls:'hit',status:'200 OK',detail:'Reponse envoyee',time:'~200ms'},arrow:'res-c-b',latency:220,title:"Le CDN met en cache et transmet",desc:"Le CDN stocke la reponse dans son cache edge.\nLes prochaines requetes au CDN seront servies directement (scenario 2).\nLa reponse est transmise au navigateur.",headers:"X-Cache: MISS (premiere requete)\nCf-Cache-Status: MISS\n=> Stockage en cache edge\n=> Transmission au client"},
+      {browser:{cls:'hit',status:'RECU',detail:'Reponse stockee en cache local',time:'~250ms'},cdn:{cls:'hit',status:'STOCKE',detail:'Cache edge rempli',time:'~220ms'},origin:{cls:'hit',status:'200 OK',detail:'Traitement termine',time:'~200ms'},arrow:null,latency:250,title:"Reponse recue - tous les caches remplis",desc:"Le navigateur recoit la reponse et la stocke en cache.\nDorenavant :\n- Les requetes immediates seront servies par le cache navigateur (~1ms)\n- Apres expiration du cache navigateur, le CDN servira (~15ms)\n- Ce n'est qu'apres expiration des deux que le serveur sera re-sollicite\n\nC'est le scenario le plus lent mais il remplit tous les caches.",headers:"Temps total: ~250ms\nCaches remplis:\n  - Navigateur: max-age=300\n  - CDN edge: max-age=300\nProchaine requete: ~1ms"}
+    ],maxLatency:300
+  }
+];
+
+let currentScenario=0,currentStep=-1,playing=false,playTimer=null;
+
+function setBox(id,data){
+  const box=document.getElementById('box'+id);
+  box.className='cache-box '+(data.cls||'idle');
+  document.getElementById('status'+id).textContent=data.status;
+  document.getElementById('status'+id).className='cache-status '+(data.cls==='hit'?'hit':data.cls==='miss'?'miss':data.cls==='stale'?'stale':'');
+  document.getElementById('detail'+id).textContent=data.detail;
+  document.getElementById('time'+id).textContent=data.time||'';
+}
+
+function clearArrows(){document.getElementById('arrowSvg').innerHTML='';}
+
+function drawArrow(type){
+  if(!type)return;
+  const svg=document.getElementById('arrowSvg');
+  const viz=document.getElementById('vizArea');
+  const w=viz.offsetWidth,h=viz.offsetHeight;
+  const third=w/3;
+  let x1,y1,x2,y2,color;
+  const midY=h*0.5;
+  if(type==='req-b-c'){x1=third-20;x2=third+20;y1=midY-10;y2=midY-10;color='#e94560';}
+  else if(type==='req-c-o'){x1=third*2-20;x2=third*2+20;y1=midY-10;y2=midY-10;color='#e94560';}
+  else if(type==='res-o-c'){x1=third*2+20;x2=third*2-20;y1=midY+20;y2=midY+20;color='#4ecca3';}
+  else if(type==='res-c-b'){x1=third+20;x2=third-20;y1=midY+20;y2=midY+20;color='#4ecca3';}
+  const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+  line.setAttribute('x1',x1);line.setAttribute('y1',y1);
+  line.setAttribute('x2',x2);line.setAttribute('y2',y2);
+  line.setAttribute('stroke',color);line.setAttribute('stroke-width','4');
+  line.setAttribute('marker-end','url(#arrowHead'+color.replace('#','')+')');;
+  // Arrow marker
+  let defs=svg.querySelector('defs');
+  if(!defs){defs=document.createElementNS('http://www.w3.org/2000/svg','defs');svg.appendChild(defs);}
+  const markerId='arrowHead'+color.replace('#','');
+  if(!document.getElementById(markerId)){
+    const marker=document.createElementNS('http://www.w3.org/2000/svg','marker');
+    marker.setAttribute('id',markerId);marker.setAttribute('markerWidth','10');marker.setAttribute('markerHeight','7');
+    marker.setAttribute('refX','10');marker.setAttribute('refY','3.5');marker.setAttribute('orient','auto');
+    const poly=document.createElementNS('http://www.w3.org/2000/svg','polygon');
+    poly.setAttribute('points','0 0, 10 3.5, 0 7');poly.setAttribute('fill',color);
+    marker.appendChild(poly);defs.appendChild(marker);
+  }
+  // Animated dash
+  line.setAttribute('stroke-dasharray','12');
+  line.innerHTML=`<animate attributeName="stroke-dashoffset" from="24" to="0" dur="0.6s" repeatCount="indefinite"/>`;
+  svg.appendChild(line);
+  // Dot
+  const circle=document.createElementNS('http://www.w3.org/2000/svg','circle');
+  circle.setAttribute('r','6');circle.setAttribute('fill',color);
+  circle.setAttribute('filter',`drop-shadow(0 0 6px ${color})`);
+  circle.innerHTML=`<animate attributeName="cx" from="${x1}" to="${x2}" dur="0.8s" repeatCount="indefinite"/>
+    <animate attributeName="cy" from="${y1}" to="${y2}" dur="0.8s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" from="1" to="0.4" dur="0.8s" repeatCount="indefinite"/>`;
+  svg.appendChild(circle);
+}
+
+function goToStep(idx){
+  const s=scenarios[currentScenario];
+  if(idx<0||idx>=s.steps.length)return;
+  currentStep=idx;
+  const st=s.steps[idx];
+  setBox('Browser',st.browser);
+  setBox('CDN',st.cdn);
+  setBox('Origin',st.origin);
+  clearArrows();
+  if(st.arrow)drawArrow(st.arrow);
+  const pct=Math.min(100,(st.latency/s.maxLatency)*100);
+  const fill=document.getElementById('latencyFill');
+  fill.style.width=pct+'%';
+  fill.style.background=st.latency<5?'#4ecca3':st.latency<50?'#f0a030':'#e94560';
+  document.getElementById('latencyValue').textContent=st.latency+'ms';
+  document.getElementById('stepTitle').textContent=st.title;
+  document.getElementById('stepDesc').textContent=st.desc;
+  const hb=document.getElementById('headersBlock');hb.style.display='block';hb.textContent=st.headers;
+}
+
+function loadScenario(idx){
+  currentScenario=idx;
+  document.querySelectorAll('.scenarios button').forEach((b,i)=>b.classList.toggle('active',i===idx));
+  doReset();
+}
+
+function doReset(){
+  doPause();currentStep=-1;clearArrows();
+  ['Browser','CDN','Origin'].forEach(id=>setBox(id,{cls:'idle',status:'En attente',detail:'-',time:''}));
+  document.getElementById('latencyFill').style.width='0';
+  document.getElementById('latencyValue').textContent='0 ms';
+  document.getElementById('stepTitle').textContent=scenarios[currentScenario].name;
+  document.getElementById('stepDesc').textContent='Appuyez sur Lecture ou Etape pour demarrer.';
+  document.getElementById('headersBlock').style.display='none';
+}
+
+function doStep(){
+  const s=scenarios[currentScenario];
+  if(currentStep<s.steps.length-1)goToStep(currentStep+1);
+}
+
+function play(){
+  if(playing)return;
+  playing=true;
+  document.getElementById('btnPlay').classList.add('active');
+  const tick=()=>{
+    const s=scenarios[currentScenario];
+    if(currentStep<s.steps.length-1){doStep();playTimer=setTimeout(tick,1500);}
+    else{playing=false;document.getElementById('btnPlay').classList.remove('active');}
+  };tick();
+}
+
+function doPause(){
+  playing=false;clearTimeout(playTimer);
+  document.getElementById('btnPlay').classList.remove('active');
+}
+</script>
+</body>
+</html>

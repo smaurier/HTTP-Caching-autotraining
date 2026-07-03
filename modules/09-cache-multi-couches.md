@@ -1,1044 +1,382 @@
-# Module 09 — Cache multi-couches
+---
+titre: Cache multi-couches — orchestrer la chaîne navigateur, CDN, proxy, app, base
+cours: 11-http-caching
+notions: [pile de caches multi-couches, "clé de cache par couche (méthode + URL + Vary)", TTL décroissant vers le client, invalidation en cascade inside-out, cohérence forte vs cohérence éventuelle, fenêtre de stale cumulée, cache stampede, thundering herd, request coalescing, single-flight, probabilistic early expiration, locking distribué, "stale-while-revalidate comme amortisseur de stampede", sondes de couche X-Cache et Age, tracer une requête à travers les couches]
+outcomes:
+  - sait empiler les couches de cache navigateur, CDN, reverse proxy, app et base en attribuant à chacune son rôle et son TTL
+  - sait ordonner une invalidation en cascade de l'intérieur vers l'extérieur et identifier la couche impossible à purger
+  - sait reconnaître un cache stampede et choisir la parade adaptée (coalescing, lock, expiration probabiliste, SWR)
+  - sait tracer une requête à travers les couches avec X-Cache et Age pour localiser un HIT ou un MISS
+prerequis: [00-prerequis-et-vue-ensemble, 01-protocole-http, 02-http2-http3, 03-en-tetes-http, 04-cache-control, 05-etag-validation-conditionnelle, 06-stale-while-revalidate, 07-cache-navigateur, 08-cdn]
+next: 10-ssr
+libs: []
+tribuzen: chaîne de cache complète TribuZen — assets immutables au navigateur, annuaire public au CDN, listes d'activités au reverse proxy, agrégats au cache applicatif, base comme source de vérité, invalidation en cascade sur mutation
+last-reviewed: 2026-07
+---
 
-> **Objectif** : Comprendre comment les différentes couches de cache (navigateur, CDN, reverse proxy, application, base de donnees) interagissent, et maîtriser les stratégies de coherence, d'invalidation en cascade et de cache applicatif.
-> **Difficulte** : :star::star::star::star:
+# Cache multi-couches — orchestrer la chaîne navigateur, CDN, proxy, app, base
+
+> **Outcomes — tu sauras FAIRE :** empiler les couches de cache (navigateur, CDN, reverse proxy, application, base) en donnant à chacune son rôle et son TTL, ordonner une invalidation **en cascade** de l'intérieur vers l'extérieur, reconnaître et désamorcer un **cache stampede**, et tracer une requête couche par couche avec `X-Cache` et `Age`.
+> **Difficulté :** :star::star::star::star:
+>
+> **Portée :** ce module **orchestre** les briques déjà vues séparément — `Cache-Control` (module 04), revalidation `ETag`/`304` (module 05), `stale-while-revalidate` (module 06), cache navigateur (module 07), CDN et invalidation par tag (module 08). On ne réexplique pas chaque brique : on les **empile** et on gère leurs interactions (cohérence, invalidation en cascade, stampede, clés de cache). Le rendu serveur (SSR) et sa revalidation (ISR) sont les **modules 10 et 11** — hors sujet ici.
+
+## 1. Cas concret d'abord
+
+Sur TribuZen, la fiche d'une sortie familiale `/api/activities/42` est servie via une chaîne complète : navigateur → CDN → reverse proxy (nginx) → API (NestJS + cache applicatif) → PostgreSQL. Un organisateur corrige l'heure de rendez-vous (18 h → 17 h) et enregistre. La base est à jour **immédiatement**. Pourtant, pendant les minutes qui suivent :
+
+- un membre qui a ouvert la page il y a 20 s voit encore **18 h** (cache navigateur, `max-age=60`) ;
+- un membre d'une autre ville voit **18 h** (le POP CDN le plus proche sert encore sa copie fraîche) ;
+- l'app renvoie **18 h** pour tout le monde car l'agrégat est figé dans le cache applicatif (`EX 3600`).
+
+```
+UPDATE activities SET meet_at='17:00' WHERE id=42   → PostgreSQL : 17 h ✅
+
+  Navigateur     18 h   ← stale (encore 40 s de max-age)
+  CDN (edge)     18 h   ← stale (encore 250 s de s-maxage)
+  Reverse proxy  18 h   ← stale (encore 90 s de TTL)
+  App cache      18 h   ← stale (encore 3500 s d'EXPIRE)
+  PostgreSQL     17 h   ← source de vérité
+```
+
+La même donnée existe maintenant à **cinq endroits** avec **cinq durées de vie différentes**. Écrire dans la base ne suffit pas : il faut **orchestrer** l'invalidation des couches, dans le bon ordre, et savoir laquelle est impossible à purger. Pire, si on purge tout d'un coup une fiche très populaire, les requêtes qui arrivent juste après trouvent un cache vide et **tapent toutes la base en même temps** — c'est le *cache stampede*. Ce module traite ces deux problèmes : la **cohérence en cascade** et le **stampede**.
 
 ---
 
-## 1. La pile de caches : Browser -> CDN -> Reverse Proxy -> App -> DB
+## 2. Théorie complète, concise
 
-### 1.1 Vue d'ensemble
+### 2.1 La pile : cinq couches, un même octet
 
-Une requête traverse potentiellement **5 couches de cache** avant d'atteindre la source de verite :
-
-```
-+-------------+     +---------+     +---------------+     +----------+     +------+
-|  Browser    | --> |   CDN   | --> | Reverse Proxy | --> |   App    | --> |  DB  |
-|  Cache      |     |  (edge) |     |  (Varnish/    |     |  Cache   |     |      |
-|             |     |         |     |   Nginx)      |     | (Redis)  |     |      |
-+-------------+     +---------+     +---------------+     +----------+     +------+
-    Couche 1         Couche 2          Couche 3           Couche 4       Source
-    (client)         (reseau)          (infra)            (code)        de verite
-```
-
-### 1.2 L'analogie du système postal
-
-- **Browser Cache** = ta boite aux lettres personnelle (rapide, petite capacité)
-- **CDN** = le bureau de poste de ton quartier (moyen, partage entre voisins)
-- **Reverse Proxy** = le centre de tri regional (gros volume, proche du destinataire final)
-- **App Cache (Redis)** = le classeur du bureau d'Alice (donnees structurees, acces rapide)
-- **DB** = les archives nationales (source de verite, lent mais complet)
-
-### 1.3 Chaque couche a son role
-
-| Couche | Quoi cacher | TTL typique | Qui controle | Invalidation |
-|--------|-------------|-------------|-------------|-------------|
-| Browser | Reponses HTTP | 1min - 1an | Headers HTTP | max-age, no-cache |
-| CDN | Reponses HTTP | 5min - 24h | Headers + config CDN | Purge API |
-| Reverse Proxy | Reponses HTTP | 1min - 1h | VCL / config | Ban, purge |
-| App (Redis) | Donnees structurees | 30s - 1h | Code applicatif | DEL, EXPIRE |
-| DB (query cache) | Resultats de requêtes | Auto | Moteur DB | Auto-invalidation |
-
-### 1.4 Exemple concret : page produit e-commerce
+Une requête `GET` traverse jusqu'à cinq caches avant d'atteindre la source de vérité. Chaque couche répond « j'ai » (HIT) ou « je passe à la suivante » (MISS).
 
 ```
-GET /produit/42
-
-Couche        Hit/Miss    Temps    Commentaire
-------        --------    -----    -----------
-Browser       MISS        0ms      Premier visite
-CDN (edge)    MISS        2ms      Pas encore cache
-CDN (shield)  MISS        15ms     Pas encore cache
-Reverse Proxy MISS        1ms      Pas encore cache
-App Cache     HIT         0.5ms    Redis a le produit 42 !
-                                   (pas besoin de DB)
-
-Temps total : ~19ms
-
-Deuxieme visite (meme utilisateur, < max-age) :
-Browser       HIT         0ms      Instantane !
-
-Autre utilisateur, meme POP :
-CDN (edge)    HIT         2ms      Rapide !
++-----------+   +-------+   +---------------+   +-----------+   +-----+
+| Navigateur|-->|  CDN  |-->| Reverse proxy |-->| App cache |-->| Base|
+| (privé)   |   | (edge)|   | (nginx/Varnish)|  | (Redis)   |   | (BDD)|
++-----------+   +-------+   +---------------+   +-----------+   +-----+
+ Couche 1        Couche 2      Couche 3           Couche 4      Source
+ 1 user          N users       N users            process(es)  vérité
 ```
+
+| Couche | Cache | Ce qu'elle stocke | Contrôle | TTL typique |
+|---|---|---|---|---|
+| Navigateur | privé (module 07) | réponses HTTP | `Cache-Control: max-age` | 30 s – 1 an (assets) |
+| CDN | partagé (module 08) | réponses HTTP | `s-maxage` + surrogate keys | 1 min – 24 h |
+| Reverse proxy | partagé | réponses HTTP | config (VCL/nginx) | 30 s – 1 h |
+| App cache | applicatif | **données**, pas des réponses HTTP | code (`SET/DEL/EXPIRE`) | 30 s – 1 h |
+| Base | source de vérité | l'état canonique | requêtes SQL | — |
+
+Distinction cruciale : les trois premières couches cachent des **réponses HTTP** (pilotées par en-têtes, vues aux modules 04-08). Le cache applicatif (couche 4) cache des **objets métier** (un agrégat, un résultat de requête) et n'obéit pas aux en-têtes HTTP — c'est **ton code** qui décide.
+
+### 2.2 La règle du TTL décroissant vers le client
+
+> Plus une couche est **loin de la source**, plus elle est **difficile à invalider**, donc plus son TTL doit être **court**.
+
+```
+Base        pas de TTL (source de vérité)
+App cache   EXPIRE 3600 s   (tu contrôles : DEL instantané possible)
+Rev. proxy  TTL   300 s     (purge possible via API/PURGE)
+CDN         s-maxage 120 s  (purge par tag, ~qq secondes de propagation)
+Navigateur  max-age 30 s    (IMPOSSIBLE à purger de l'extérieur)
+```
+
+Le navigateur est le **cul-de-sac** : aucune API ne permet de vider le cache HTTP d'un utilisateur distant. Sa seule borne est le `max-age` que tu lui as donné. Donc il reçoit le TTL le plus court. **Anti-pattern absolu** : `max-age` long sur le navigateur et TTL court en amont — tu purges le CDN et l'app, mais l'utilisateur reste bloqué sur l'ancienne valeur jusqu'à expiration locale.
+
+### 2.3 Clé de cache : ce qui distingue deux entrées, par couche
+
+Chaque couche partagée range ses entrées sous une **clé de cache**. D'après MDN, la clé HTTP se compose de la **méthode + l'URL**, étendue par les en-têtes listés dans `Vary`.
+
+```
+Clé de cache HTTP (CDN, proxy) = méthode + URL + valeurs des en-têtes cités dans Vary
+
+Vary: Accept-Encoding          → une entrée par encodage (gzip, br)
+Vary: Accept-Language          → une entrée par langue
+```
+
+Conséquences en multi-couches :
+- **`Vary` trop large fragmente** le cache. `Vary: User-Agent` = quasiment une entrée par visiteur → taux de HIT proche de zéro, la couche ne sert à rien.
+- **La clé applicative est différente** : au niveau code, ta clé est ce que tu choisis (`activity:42`, `activities:list:page=1`). Elle n'inclut pas `Vary` — c'est à toi d'y intégrer ce qui fait varier la donnée (locale, rôle).
+- **Une donnée personnalisée ne doit jamais partager une clé partagée.** Si `/api/me` dépend de l'utilisateur, il faut `private`/`no-store` (module 04), sinon le CDN sert la réponse d'Alice à Bob sous la même clé URL.
+
+### 2.4 Cohérence : forte vs éventuelle
+
+Avec cinq copies, deux modèles de cohérence :
+
+| Modèle | Garantie | Coût | Quand |
+|---|---|---|---|
+| **Forte** | toutes les couches voient la même valeur en même temps | on court-circuite le cache (bypass) ou on invalide de façon synchrone | solde, stock « plus que 2 », auth |
+| **Éventuelle** | les couches **convergent** après une fenêtre de stale bornée | quasi nul | annuaire, listes, fiches, avatars |
+
+La **fenêtre de stale se cumule** : dans le pire cas, le retard visible par un utilisateur est borné par la couche qu'on **ne peut pas** purger, c'est-à-dire le `max-age` du navigateur. C'est encore une raison de le garder court. La cohérence forte, elle, implique en général de **ne pas cacher** la donnée critique (`no-store`) plutôt que d'essayer de synchroniser cinq couches — plus simple et plus sûr.
+
+### 2.5 Invalidation en cascade (inside-out)
+
+Quand la source change, on invalide **de l'intérieur (proche source) vers l'extérieur (proche client)**. L'ordre importe : si on purge le CDN **avant** l'app cache, une requête peut recharger le CDN depuis un app cache encore périmé — on aurait re-caché du stale.
+
+```
+1. Base       UPDATE ... (source de vérité d'abord)
+2. App cache  redis.del('activity:42')      + del des agrégats qui la contiennent
+3. Rev. proxy PURGE /api/activities/42
+4. CDN        purge par surrogate key "activity-42"   (module 08)
+5. Navigateur — impossible — on compte sur un max-age court
+```
+
+Deux subtilités :
+- **Une entité vit dans plusieurs entrées.** L'activité 42 apparaît dans `/api/activities/42`, dans `/api/activities?famille=7` et sur l'accueil. Les **surrogate keys / cache tags** (module 08) permettent de purger toutes ces URLs d'un coup via une clé `activity-42`. Sans tags, il faut connaître et purger chaque URL une par une.
+- **Le navigateur** ne se purge pas. Parades côté client : `max-age` court, `no-cache` (revalidation systématique, module 05), URL versionnée (`?v=3`), ou notification temps réel (WebSocket/SSE) qui déclenche un re-fetch.
+
+### 2.6 Cache stampede / thundering herd
+
+Le piège du multi-couches : quand une clé **populaire** expire ou est purgée, **toutes** les requêtes concurrentes ratent le cache **en même temps** et se ruent sur la couche du dessous (jusqu'à la base). C'est le **cache stampede**, aussi appelé **thundering herd**.
+
+```
+t0    activity:42 expire dans le cache applicatif
+t0+ε  500 requêtes/s arrivent → 500 MISS simultanés
+      → 500 requêtes SQL identiques → la base sature → latence → timeouts
+      → le cache ne se repeuple pas → ça empire (effondrement)
+```
+
+Le cache, censé **protéger** la base, devient l'origine d'une panne au moment précis où il expire. Quatre parades (à combiner) :
+
+1. **Request coalescing (single-flight).** À la première MISS, on pose un verrou « recalcul en cours ». Les requêtes suivantes **attendent** ce recalcul au lieu d'en lancer un chacune : **une seule** requête SQL, toutes partagent le résultat.
+2. **Locking distribué.** Même idée quand plusieurs **process/serveurs** partagent le cache (Redis) : un lock distribué (`SET NX` avec TTL) garantit qu'un seul nœud recalcule ; les autres attendent ou servent l'ancienne valeur.
+3. **Probabilistic early expiration (XFetch).** Chaque lecture peut décider de recalculer **un peu avant** l'expiration, avec une probabilité qui **croît à l'approche** de l'échéance. Statistiquement, un seul client rafraîchit tôt et la clé n'expire jamais « à sec » pour la foule (papier VLDB 2015, *Optimal Probabilistic Cache Stampede Prevention*).
+4. **stale-while-revalidate (module 06).** On sert la copie **stale immédiatement** et on revalide **en arrière-plan** : aucune requête n'attend, une seule revalidation part. C'est l'amortisseur naturel du stampede au niveau HTTP (CDN/navigateur) — combiné au coalescing côté applicatif, il couvre les cinq couches.
+
+### 2.7 Sondes de couche : lire où ça a HIT
+
+Pour diagnostiquer, deux en-têtes servent de sonde à travers la pile :
+
+- **`Age`** (standard, module 04) : secondes écoulées depuis que la réponse a été générée par l'**origine**. `Age: 0` ou absent → vient de l'origine ; `Age` élevé → sert depuis un cache partagé (CDN/proxy).
+- **`X-Cache`** (non standard, ajouté par la plupart des CDN/proxies) : `HIT`/`MISS`, souvent enrichi (`X-Cache: HIT from edge-par-1`). Certains CDN utilisent `CF-Cache-Status`, `X-Cache-Status`, etc. — le nom exact dépend du fournisseur, mais l'idée est la même.
+
+En empilant les couches, chacune peut estampiller sa propre sonde (`X-Cache: HIT (proxy)`, `X-Cache: MISS (app)`), ce qui permet de **tracer** exactement où la requête s'est arrêtée — c'est l'objet du lab.
 
 ---
 
-## 2. Cache coherence et donnees stale
+## 3. Worked examples
 
-### 2.1 Le problème fondamental
+### Exemple 1 — Tracer une requête à travers les couches avec `curl -I`
 
-Avec 5 couches de cache, la même donnee existe potentiellement a 5 endroits différents. Quand la source de verite change, comment s'assurer que toutes les couches se mettent a jour ?
-
-```
-Etat initial : prix du produit 42 = 29.99 EUR
-
-  Browser Cache : 29.99 EUR    (max-age: 60s)
-  CDN :           29.99 EUR    (s-maxage: 300s)
-  Reverse Proxy : 29.99 EUR    (TTL: 120s)
-  Redis :         29.99 EUR    (EXPIRE: 3600s)
-  DB :            29.99 EUR    (source de verite)
-
-                 MISE A JOUR : prix passe a 24.99 EUR
-
-  Browser Cache : 29.99 EUR    <-- STALE ! (encore 45s de TTL)
-  CDN :           29.99 EUR    <-- STALE ! (encore 250s de TTL)
-  Reverse Proxy : 29.99 EUR    <-- STALE ! (encore 80s de TTL)
-  Redis :         29.99 EUR    <-- STALE ! (encore 3200s de TTL)
-  DB :            24.99 EUR    <-- A JOUR (source de verite)
-```
-
-### 2.2 Les 3 modèles de coherence
-
-```
-+------------------+-----------------------------------------------+
-| Modele           | Description                                   |
-+------------------+-----------------------------------------------+
-| Coherence forte  | Toutes les couches voient la meme valeur      |
-|                  | en meme temps. Cout : performances.           |
-+------------------+-----------------------------------------------+
-| Coherence        | Les couches finissent par converger.           |
-| eventuelle       | Fenetre de stale acceptable.                  |
-+------------------+-----------------------------------------------+
-| Pas de coherence | Chaque couche expire independamment.           |
-|                  | Pas de garantie.                              |
-+------------------+-----------------------------------------------+
-```
-
-### 2.3 Quand choisir quoi
-
-| Scenario | Modèle | Justification |
-|----------|--------|---------------|
-| Prix affiche | Eventuelle (court TTL) | Quelques secondes de retard OK |
-| Stock disponible | Eventuelle (très court) | "Plus que 2 !" doit etre a jour |
-| Solde bancaire | Forte | Toujours exact |
-| Avatar utilisateur | Eventuelle (long TTL) | Pas grave si ancien 5 min |
-| Token d'authentification | Forte | Sécurité |
-| Article de blog | Eventuelle | Changements rares |
-
----
-
-## 3. Invalidation en cascade
-
-### 3.1 Le principe
-
-Quand une donnee change, il faut invalider **de l'interieur vers l'exterieur** :
-
-```
-Invalidation en cascade (Inside-Out) :
-========================================
-
-  1. Mise a jour DB          UPDATE products SET price = 24.99 WHERE id = 42
-           |
-           v
-  2. Invalider App Cache     redis.del('product:42')
-           |
-           v
-  3. Invalider Reverse Proxy PURGE /produit/42
-           |
-           v
-  4. Invalider CDN           API purge par tag "product-42"
-           |
-           v
-  5. Browser ?               On ne peut pas ! Il faut attendre max-age
-                             ou que l'utilisateur recharge
-```
-
-### 3.2 Le problème du browser cache
-
-On ne peut PAS invalider le cache navigateur de l'exterieur. Solutions :
-
-```
-Solution 1 : TTL court
-  Cache-Control: max-age=60
-  --> Maximum 60s de stale
-
-Solution 2 : no-cache (revalidation systematique)
-  Cache-Control: no-cache
-  --> Toujours revalide, mais peut utiliser 304
-
-Solution 3 : Versioning dans l'URL
-  /api/v2/produits/42  --> Nouvelle URL = pas de cache stale
-
-Solution 4 : WebSocket / SSE pour notifier le client
-  Le serveur pousse un event "invalidate:product:42"
-  Le client force un re-fetch
-```
-
-### 3.3 Implementation : invalidation en cascade
+On simule la chaîne avec un petit serveur Node qui joue **reverse proxy + app cache** devant une « base » lente, et on lit les sondes. (Le CDN et le navigateur s'observent ensuite avec les vrais outils — c'est le lab.)
 
 ```js
-import { createServer, request as httpRequest } from 'node:http';
+// layers.js — reverse proxy + app cache devant une base simulée
+import { createServer } from 'node:http';
 
-// ---- Simuler Redis ----
-class AppCache {
-  #store = new Map();
+const db = new Map([['42', { id: '42', meetAt: '18:00' }]]);
+const appCache = new Map();   // clé métier -> { value, expiresAt }
+const proxyCache = new Map(); // URL -> { body, headers, expiresAt }
 
-  get(key) {
-    const entry = this.#store.get(key);
-    if (!entry) return null;
-    if (Date.now() > entry.expiresAt) {
-      this.#store.delete(key);
-      return null;
-    }
-    return entry.value;
-  }
+const now = () => Date.now();
 
-  set(key, value, ttlSeconds = 3600) {
-    this.#store.set(key, {
-      value,
-      expiresAt: Date.now() + ttlSeconds * 1000
-    });
-  }
-
-  del(key) {
-    this.#store.delete(key);
-    console.log(`[AppCache] Invalidation de "${key}"`);
-  }
-
-  // Invalidation par pattern (comme Redis SCAN + DEL)
-  delByPattern(pattern) {
-    let count = 0;
-    for (const key of this.#store.keys()) {
-      if (key.includes(pattern)) {
-        this.#store.delete(key);
-        count++;
-      }
-    }
-    console.log(`[AppCache] Invalidation par pattern "${pattern}" : ${count} cles`);
-    return count;
-  }
+function readActivity(id) {
+  // Couche 4 : app cache
+  const hit = appCache.get(`activity:${id}`);
+  if (hit && now() < hit.expiresAt) return { value: hit.value, xcache: 'HIT (app)' };
+  // Couche 5 : base (lente)
+  const row = db.get(id);
+  if (!row) return null;
+  appCache.set(`activity:${id}`, { value: row, expiresAt: now() + 3600_000 });
+  return { value: row, xcache: 'MISS (app -> db)' };
 }
 
-// ---- Simuler la base de donnees ----
-class Database {
-  #products = new Map([
-    ['42', { id: '42', nom: 'Clavier mecanique', prix: 89.99, stock: 15 }],
-    ['43', { id: '43', nom: 'Souris ergonomique', prix: 49.99, stock: 8 }]
-  ]);
+createServer((req, res) => {
+  const m = req.url.match(/^\/api\/activities\/(\d+)$/);
+  if (!m) { res.writeHead(404); return res.end('not found'); }
+  const id = m[1];
 
-  getProduct(id) {
-    console.log(`[DB] Lecture du produit ${id}`);
-    return this.#products.get(id) || null;
+  // Couche 3 : reverse proxy
+  const cached = proxyCache.get(req.url);
+  if (cached && now() < cached.expiresAt) {
+    res.writeHead(200, { ...cached.headers, 'X-Cache': 'HIT (proxy)', Age: Math.round((now() - cached.storedAt) / 1000) });
+    return res.end(cached.body);
   }
 
-  updateProduct(id, updates) {
-    const product = this.#products.get(id);
-    if (!product) return null;
-    Object.assign(product, updates);
-    console.log(`[DB] Mise a jour produit ${id}:`, updates);
-    return product;
-  }
-}
+  const found = readActivity(id);
+  if (!found) { res.writeHead(404); return res.end('not found'); }
 
-// ---- Simuler le reverse proxy cache ----
-class ReverseProxyCache {
-  #store = new Map();
-
-  get(url) {
-    const entry = this.#store.get(url);
-    if (!entry) return null;
-    if (Date.now() > entry.expiresAt) {
-      this.#store.delete(url);
-      return null;
-    }
-    console.log(`[ReverseProxy] HIT pour ${url}`);
-    return entry.value;
-  }
-
-  set(url, value, ttlSeconds = 120) {
-    this.#store.set(url, {
-      value,
-      expiresAt: Date.now() + ttlSeconds * 1000
-    });
-  }
-
-  purge(url) {
-    this.#store.delete(url);
-    console.log(`[ReverseProxy] PURGE ${url}`);
-  }
-
-  purgeByTag(tag) {
-    // Simuler la purge par tag
-    let count = 0;
-    for (const [url, entry] of this.#store) {
-      if (entry.value.tags && entry.value.tags.includes(tag)) {
-        this.#store.delete(url);
-        count++;
-      }
-    }
-    console.log(`[ReverseProxy] PURGE par tag "${tag}" : ${count} URLs`);
-    return count;
-  }
-}
-
-const db = new Database();
-const appCache = new AppCache();
-const proxyCache = new ReverseProxyCache();
-
-// ---- Invalidation en cascade ----
-async function cascadeInvalidation(productId, tags) {
-  console.log('\n=== DEBUT INVALIDATION EN CASCADE ===');
-
-  // 1. App Cache (Redis)
-  appCache.del(`product:${productId}`);
-  appCache.delByPattern(`list:products`); // Listes qui contiennent ce produit
-
-  // 2. Reverse Proxy
-  proxyCache.purge(`/api/produits/${productId}`);
-  for (const tag of tags) {
-    proxyCache.purgeByTag(tag);
-  }
-
-  // 3. CDN (simule)
-  console.log(`[CDN] Purge par tag : ${tags.join(', ')}`);
-  // En vrai : appel API CDN
-  // await fetch('https://api.fastly.com/service/xxx/purge/' + tags[0], ...);
-
-  // 4. Browser : impossible ! On compte sur le TTL court
-  console.log('[Browser] Impossible a invalider - attente du TTL');
-
-  console.log('=== FIN INVALIDATION EN CASCADE ===\n');
-}
-
-// ---- Serveur HTTP ----
-const server = createServer(async (req, res) => {
-  // ---- GET /api/produits/:id ----
-  const getMatch = req.url.match(/^\/api\/produits\/(\d+)$/);
-  if (req.method === 'GET' && getMatch) {
-    const id = getMatch[1];
-
-    // 1. Verifier reverse proxy
-    const proxyCached = proxyCache.get(req.url);
-    if (proxyCached) {
-      res.writeHead(200, {
-        'Content-Type': 'application/json',
-        'X-Cache': 'HIT (reverse-proxy)',
-        'Cache-Control': 'public, max-age=30',
-        'CDN-Cache-Control': 'max-age=300'
-      });
-      res.end(JSON.stringify(proxyCached.data));
-      return;
-    }
-
-    // 2. Verifier app cache
-    let product = appCache.get(`product:${id}`);
-    let cacheSource = 'app-cache';
-
-    if (!product) {
-      // 3. Aller en DB
-      product = db.getProduct(id);
-      cacheSource = 'database';
-
-      if (!product) {
-        res.writeHead(404);
-        res.end(JSON.stringify({ error: 'Produit non trouve' }));
-        return;
-      }
-
-      // Stocker en app cache
-      appCache.set(`product:${id}`, product, 3600);
-    }
-
-    // Stocker en reverse proxy
-    const tags = [`product-${id}`, 'products'];
-    proxyCache.set(req.url, { data: product, tags }, 120);
-
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'X-Cache': `MISS (source: ${cacheSource})`,
-      'Cache-Control': 'public, max-age=30',
-      'CDN-Cache-Control': 'max-age=300',
-      'Surrogate-Key': tags.join(' ')
-    });
-    res.end(JSON.stringify(product));
-    return;
-  }
-
-  // ---- PUT /api/produits/:id ----
-  const putMatch = req.url.match(/^\/api\/produits\/(\d+)$/);
-  if (req.method === 'PUT' && putMatch) {
-    const id = putMatch[1];
-    let body = '';
-    for await (const chunk of req) body += chunk;
-    const updates = JSON.parse(body);
-
-    // 1. Mettre a jour la DB (source de verite)
-    const updated = db.updateProduct(id, updates);
-    if (!updated) {
-      res.writeHead(404);
-      res.end(JSON.stringify({ error: 'Produit non trouve' }));
-      return;
-    }
-
-    // 2. Invalidation en cascade
-    await cascadeInvalidation(id, [`product-${id}`, 'products']);
-
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-store'
-    });
-    res.end(JSON.stringify(updated));
-    return;
-  }
-
-  res.writeHead(404);
-  res.end('Not found');
-});
-
-server.listen(3000, () => {
-  console.log('Serveur multi-couches sur http://localhost:3000');
-  console.log('');
-  console.log('Tester :');
-  console.log('  curl http://localhost:3000/api/produits/42');
-  console.log('  curl http://localhost:3000/api/produits/42  (2e fois = cache)');
-  console.log('');
-  console.log('Modifier :');
-  console.log('  curl -X PUT http://localhost:3000/api/produits/42 \\');
-  console.log('    -H "Content-Type: application/json" \\');
-  console.log('    -d \'{"prix": 74.99}\'');
-});
+  const body = JSON.stringify(found.value);
+  const headers = {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'public, max-age=30, s-maxage=120',
+    'Surrogate-Key': `activity-${id} activities`,
+    'X-Cache': found.xcache,       // MISS (proxy) : sonde de la couche app en dessous
+    Age: 0,
+  };
+  proxyCache.set(req.url, { body, headers, storedAt: now(), expiresAt: now() + 300_000 });
+  res.writeHead(200, headers);
+  res.end(body);
+}).listen(3000, () => console.log('http://localhost:3000'));
 ```
 
----
-
-## 4. Surrogate keys / cache tags
-
-### 4.1 Pourquoi des tags ?
-
-Une page web est rarement composee d'une seule "entite". La page `/produit/42` peut dépendre de :
+Trace attendue avec `curl -I` :
 
 ```
-/produit/42 depend de :
-========================
-- Le produit 42 lui-meme
-- L'auteur de la fiche
-- La categorie "peripheriques"
-- Le taux de TVA
-- Les avis clients
-- Les produits recommandes (43, 44, 45)
-- Le layout global du site
-- Les promotions en cours
+# 1re requête : rien en cache -> descend jusqu'à la base
+$ curl -sI http://localhost:3000/api/activities/42 | grep -Ei 'x-cache|age|cache-control'
+Cache-Control: public, max-age=30, s-maxage=120
+X-Cache: MISS (app -> db)
+Age: 0
 
-Tags : product-42 author-bob category-peripheriques
-       reviews-42 promo-summer layout-v3
+# 2e requête : le reverse proxy répond seul, sans toucher app ni base
+$ curl -sI http://localhost:3000/api/activities/42 | grep -Ei 'x-cache|age'
+X-Cache: HIT (proxy)
+Age: 1
 ```
 
-### 4.2 Matrice de dépendances
+Lecture : le premier appel a `X-Cache: MISS (app -> db)` et `Age: 0` → il vient de la source. Le second a `X-Cache: HIT (proxy)` et `Age` qui grimpe → il est servi par la couche 3 sans redescendre. En production, tu empiles à ça le `CF-Cache-Status` du CDN et le `(from disk cache)` de DevTools (module 07) pour couvrir les cinq couches.
 
-```
-                   product-42  category-tech  author-alice  promo-noel
-                   ----------  -------------  -----------   ----------
-/produit/42            X                                        X
-/categorie/tech                     X
-/auteur/alice                                      X
-/accueil               X              X              X           X
-/recherche?q=clav      X              X
-/promo/noel            X                                        X
-```
+### Exemple 2 — Désamorcer un stampede avec du request coalescing
 
-Quand `product-42` change, on purge : `/produit/42`, `/accueil`, `/recherche?q=clav`, `/promo/noel`.
-
-### 4.3 Implementation des tags
+Sur une clé populaire, on veut qu'**une seule** régénération parte même sous 500 requêtes concurrentes. Le pattern single-flight en mémoire :
 
 ```js
-// Classe pour gerer les tags de cache
-class TaggedCache {
-  #store = new Map();       // URL -> { body, tags, storedAt, ttl }
-  #tagIndex = new Map();    // tag -> Set<URL>
+// single-flight.js — une seule régénération concurrente par clé
+const cache = new Map();      // clé -> { value, expiresAt }
+const inflight = new Map();   // clé -> Promise en cours
 
-  set(url, body, tags = [], ttlSeconds = 3600) {
-    // Stocker l'entree
-    this.#store.set(url, {
-      body,
-      tags,
-      storedAt: Date.now(),
-      ttl: ttlSeconds * 1000
-    });
+async function getActivity(id) {
+  const key = `activity:${id}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() < hit.expiresAt) return hit.value;   // HIT frais
 
-    // Indexer par tag
-    for (const tag of tags) {
-      if (!this.#tagIndex.has(tag)) {
-        this.#tagIndex.set(tag, new Set());
-      }
-      this.#tagIndex.get(tag).add(url);
-    }
+  // Une régénération est déjà en cours ? on attend LA MÊME promesse.
+  if (inflight.has(key)) return inflight.get(key);           // coalescing
 
-    console.log(`[TaggedCache] SET ${url} avec tags: [${tags.join(', ')}]`);
-  }
-
-  get(url) {
-    const entry = this.#store.get(url);
-    if (!entry) return null;
-    if (Date.now() - entry.storedAt > entry.ttl) {
-      this.#purgeEntry(url);
-      return null;
-    }
-    return entry.body;
-  }
-
-  // Purge par URL
-  purgeUrl(url) {
-    this.#purgeEntry(url);
-    console.log(`[TaggedCache] PURGE URL: ${url}`);
-  }
-
-  // Purge par tag -- la star du spectacle
-  purgeByTag(tag) {
-    const urls = this.#tagIndex.get(tag);
-    if (!urls) {
-      console.log(`[TaggedCache] PURGE TAG "${tag}": 0 URLs`);
-      return 0;
-    }
-
-    const count = urls.size;
-    for (const url of urls) {
-      this.#purgeEntry(url);
-    }
-    console.log(`[TaggedCache] PURGE TAG "${tag}": ${count} URLs`);
-    return count;
-  }
-
-  // Soft purge par tag : marquer stale au lieu de supprimer
-  softPurgeByTag(tag) {
-    const urls = this.#tagIndex.get(tag);
-    if (!urls) return 0;
-
-    let count = 0;
-    for (const url of urls) {
-      const entry = this.#store.get(url);
-      if (entry) {
-        // Forcer l'expiration (mais garder en cache pour SWR)
-        entry.storedAt = Date.now() - entry.ttl - 1;
-        entry.softPurged = true;
-        count++;
-      }
-    }
-    console.log(`[TaggedCache] SOFT PURGE TAG "${tag}": ${count} URLs marquees stale`);
-    return count;
-  }
-
-  // Stats
-  stats() {
-    return {
-      entries: this.#store.size,
-      tags: this.#tagIndex.size,
-      tagDetails: Object.fromEntries(
-        [...this.#tagIndex].map(([tag, urls]) => [tag, urls.size])
-      )
-    };
-  }
-
-  #purgeEntry(url) {
-    const entry = this.#store.get(url);
-    if (entry) {
-      // Retirer des index de tags
-      for (const tag of entry.tags) {
-        const tagUrls = this.#tagIndex.get(tag);
-        if (tagUrls) {
-          tagUrls.delete(url);
-          if (tagUrls.size === 0) this.#tagIndex.delete(tag);
-        }
-      }
-      this.#store.delete(url);
-    }
-  }
-}
-
-// Utilisation
-const cache = new TaggedCache();
-
-cache.set('/produit/42',
-  '{"id":42,"nom":"Clavier"}',
-  ['product-42', 'category-tech', 'promo-noel'],
-  3600
-);
-
-cache.set('/categorie/tech',
-  '{"produits":[42,43,44]}',
-  ['category-tech', 'product-42', 'product-43', 'product-44'],
-  1800
-);
-
-cache.set('/accueil',
-  '{"featured":[42]}',
-  ['homepage', 'product-42', 'promo-noel'],
-  600
-);
-
-console.log('Stats avant purge:', cache.stats());
-// { entries: 3, tags: 5, tagDetails: { 'product-42': 3, ... } }
-
-cache.purgeByTag('product-42');
-// Purge /produit/42, /categorie/tech, /accueil (toutes ont le tag product-42)
-
-console.log('Stats apres purge:', cache.stats());
-// { entries: 0, tags: 0, tagDetails: {} }
-```
-
----
-
-## 5. Patterns de cache applicatif
-
-### 5.1 In-memory cache (Map, LRU)
-
-Le plus simple : un `Map` ou un LRU cache directement dans le processus Node.js.
-
-```js
-// LRU Cache simple (sans dependance externe)
-class LRUCache {
-  #max;
-  #cache = new Map();
-
-  constructor(max = 1000) {
-    this.#max = max;
-  }
-
-  get(key) {
-    if (!this.#cache.has(key)) return undefined;
-    // Deplacer en fin (plus recent)
-    const value = this.#cache.get(key);
-    this.#cache.delete(key);
-    this.#cache.set(key, value);
+  const promise = (async () => {
+    const value = await queryDatabaseSlow(id);               // 1 seule fois
+    cache.set(key, { value, expiresAt: Date.now() + 60_000 });
     return value;
-  }
+  })();
 
-  set(key, value) {
-    if (this.#cache.has(key)) {
-      this.#cache.delete(key);
-    } else if (this.#cache.size >= this.#max) {
-      // Supprimer le plus ancien (premier element)
-      const firstKey = this.#cache.keys().next().value;
-      this.#cache.delete(firstKey);
-    }
-    this.#cache.set(key, value);
-  }
-
-  delete(key) { this.#cache.delete(key); }
-  get size() { return this.#cache.size; }
-  clear() { this.#cache.clear(); }
-}
-```
-
-**Avantages** : ultra-rapide (~ns), pas de dépendance.
-**Inconvenients** : pas partage entre processus, perdu au redemarrage.
-
-### 5.2 Redis cache (distribue)
-
-```js
-// Pseudo-code illustrant le pattern avec Redis
-// (necessiterait le package 'redis' en vrai)
-
-import { createServer } from 'node:http';
-
-// Simuler Redis avec un Map + TTL
-class SimulatedRedis {
-  #store = new Map();
-  #timers = new Map();
-
-  async get(key) {
-    const entry = this.#store.get(key);
-    if (!entry) return null;
-    if (entry.expiresAt && Date.now() > entry.expiresAt) {
-      this.#store.delete(key);
-      return null;
-    }
-    return entry.value;
-  }
-
-  async set(key, value, options = {}) {
-    const entry = { value };
-    if (options.EX) {
-      entry.expiresAt = Date.now() + options.EX * 1000;
-    }
-    this.#store.set(key, entry);
-  }
-
-  async del(key) {
-    this.#store.delete(key);
-  }
-
-  // MGET : obtenir plusieurs cles en une seule operation
-  async mget(...keys) {
-    return keys.map(key => {
-      const entry = this.#store.get(key);
-      if (!entry) return null;
-      if (entry.expiresAt && Date.now() > entry.expiresAt) return null;
-      return entry.value;
-    });
+  inflight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inflight.delete(key);   // on libère : les prochains MISS relanceront un seul vol
   }
 }
 
-const redis = new SimulatedRedis();
-
-// Pattern : Cache-Aside (Lazy Loading)
-async function getProductCacheAside(id) {
-  // 1. Chercher dans Redis
-  const cached = await redis.get(`product:${id}`);
-  if (cached) {
-    console.log(`[Redis] HIT product:${id}`);
-    return JSON.parse(cached);
-  }
-
-  // 2. Aller en DB
-  console.log(`[Redis] MISS product:${id}, requete DB`);
-  const product = await queryDatabase(id);
-
-  // 3. Stocker en Redis
-  await redis.set(`product:${id}`, JSON.stringify(product), { EX: 3600 });
-
-  return product;
+async function queryDatabaseSlow(id) {
+  await new Promise((r) => setTimeout(r, 200)); // requête lente
+  return { id, meetAt: '17:00' };
 }
 
-async function queryDatabase(id) {
-  // Simuler une requete DB lente
-  await new Promise(r => setTimeout(r, 50));
-  return { id, nom: `Produit ${id}`, prix: Math.random() * 100 };
-}
+// 500 appels simultanés -> 1 seule exécution de queryDatabaseSlow
+await Promise.all(Array.from({ length: 500 }, () => getActivity('42')));
 ```
 
-**Avantages** : partage entre processus/serveurs, persistant, rapide (~1ms).
-**Inconvenients** : dépendance externe, latence réseau.
-
-### 5.3 Write-Through vs Write-Behind (Write-Back)
-
-```
-Write-Through :
-===============
-L'application ecrit simultanement dans le cache ET la DB.
-
-  App ---> [Ecriture cache] + [Ecriture DB] --> Reponse
-           (synchrone)        (synchrone)
-
-  + Coherence forte : cache toujours a jour
-  - Latence d'ecriture doublee
-
-Write-Behind (Write-Back) :
-===========================
-L'application ecrit dans le cache, puis la DB est mise a jour en asynchrone.
-
-  App ---> [Ecriture cache] --> Reponse (rapide !)
-                |
-                +--> [Ecriture DB en arriere-plan]
-
-  + Latence d'ecriture faible
-  - Risque de perte de donnees si crash avant ecriture DB
-```
-
-### 5.4 Implementation Write-Through vs Write-Behind
-
-```js
-import { createServer } from 'node:http';
-
-// Simuler Redis et DB
-const redisStore = new Map();
-const dbStore = new Map([
-  ['42', { id: '42', nom: 'Clavier', prix: 89.99 }]
-]);
-
-// ---- Write-Through ----
-async function writeThroughUpdate(id, updates) {
-  const product = dbStore.get(id);
-  if (!product) throw new Error('Non trouve');
-
-  Object.assign(product, updates);
-
-  // Ecriture synchrone : DB ET cache
-  dbStore.set(id, product);                                    // DB
-  redisStore.set(`product:${id}`, JSON.stringify(product));    // Cache
-
-  console.log(`[Write-Through] DB + Cache mis a jour pour ${id}`);
-  return product;
-}
-
-// ---- Write-Behind ----
-const writeQueue = [];
-let queueTimer = null;
-
-async function writeBehindUpdate(id, updates) {
-  const product = dbStore.get(id);
-  if (!product) throw new Error('Non trouve');
-
-  Object.assign(product, updates);
-
-  // Ecriture immediate dans le cache
-  redisStore.set(`product:${id}`, JSON.stringify(product));
-  console.log(`[Write-Behind] Cache mis a jour pour ${id}`);
-
-  // Ecriture DB en asynchrone (queue)
-  writeQueue.push({ id, product: { ...product } });
-  scheduleFlush();
-
-  return product;
-}
-
-function scheduleFlush() {
-  if (queueTimer) return;
-  queueTimer = setTimeout(async () => {
-    const batch = writeQueue.splice(0);
-    console.log(`[Write-Behind] Flush de ${batch.length} ecritures en DB`);
-    for (const item of batch) {
-      dbStore.set(item.id, item.product);
-    }
-    queueTimer = null;
-    if (writeQueue.length > 0) scheduleFlush();
-  }, 1000); // Flush toutes les secondes
-}
-
-// ---- Serveur ----
-const server = createServer(async (req, res) => {
-  const match = req.url.match(/^\/api\/produits\/(\d+)$/);
-  if (!match) {
-    res.writeHead(404);
-    res.end('Not found');
-    return;
-  }
-
-  const id = match[1];
-
-  if (req.method === 'GET') {
-    // Lire depuis le cache d'abord
-    const cached = redisStore.get(`product:${id}`);
-    if (cached) {
-      res.writeHead(200, {
-        'Content-Type': 'application/json',
-        'X-Cache': 'HIT'
-      });
-      res.end(cached);
-      return;
-    }
-
-    const product = dbStore.get(id);
-    if (!product) {
-      res.writeHead(404);
-      res.end('Non trouve');
-      return;
-    }
-
-    redisStore.set(`product:${id}`, JSON.stringify(product));
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'X-Cache': 'MISS'
-    });
-    res.end(JSON.stringify(product));
-    return;
-  }
-
-  if (req.method === 'PUT') {
-    let body = '';
-    for await (const chunk of req) body += chunk;
-    const updates = JSON.parse(body);
-
-    // Choisir la strategie via un query param
-    const strategy = new URL(req.url, 'http://localhost').searchParams.get('strategy')
-                     || 'write-through';
-
-    try {
-      let result;
-      if (strategy === 'write-behind') {
-        result = await writeBehindUpdate(id, updates);
-      } else {
-        result = await writeThroughUpdate(id, updates);
-      }
-
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(result));
-    } catch (err) {
-      res.writeHead(500);
-      res.end(JSON.stringify({ error: err.message }));
-    }
-    return;
-  }
-
-  res.writeHead(405);
-  res.end('Methode non supportee');
-});
-
-server.listen(3000, () => {
-  console.log('Serveur Write-Through/Write-Behind sur http://localhost:3000');
-});
-```
-
-### 5.5 Comparaison des patterns de cache applicatif
-
-| Pattern | Coherence | Perf lecture | Perf écriture | Complexite |
-|---------|-----------|-------------|---------------|------------|
-| Cache-Aside | Eventuelle | Rapide (après 1er miss) | Normale | Faible |
-| Read-Through | Eventuelle | Rapide | Normale | Moyenne |
-| Write-Through | Forte | Rapide | Plus lente | Moyenne |
-| Write-Behind | Eventuelle | Rapide | Très rapide | Elevee |
-| Refresh-Ahead | Proactive | Rapide | Normale | Elevee |
+**Pourquoi ça marche :** la première MISS crée **une** promesse rangée dans `inflight`. Les 499 autres tombent sur `inflight.has(key)` et **attendent la même promesse** au lieu d'ouvrir 499 requêtes SQL. La base reçoit **une** requête. Pour un cache **partagé entre serveurs** (Redis), on remplace `inflight` par un **lock distribué** (`SET lock:activity:42 1 NX PX 5000`) : seul le nœud qui obtient le lock recalcule ; les autres attendent ou servent l'ancienne valeur (couplé à `stale-while-revalidate`, personne n'attend).
 
 ---
 
-## 6. Stratégies de TTL multi-couches
+## 4. Pièges & misconceptions
 
-### 6.1 La regle du "TTL decroissant"
-
-```
-Regle d'or : le TTL doit DIMINUER en s'eloignant de la source
-=============================================================
-
-  DB          (source de verite - pas de TTL)
-  App Cache   TTL = 3600s (1 heure)
-  Rev. Proxy  TTL = 300s  (5 minutes)
-  CDN         TTL = 120s  (2 minutes)
-  Browser     TTL = 30s   (30 secondes)
-
-Pourquoi ? Plus on est loin de la source, plus c'est difficile a invalider.
-Le browser est le PLUS difficile a invalider (impossible de l'exterieur).
-Donc on lui donne le TTL le plus court.
-```
-
-### 6.2 Anti-pattern : TTL inversé
+### PIÈGE #1 — Croire qu'écrire dans la base met les caches à jour
 
 ```
-NE PAS FAIRE :
-  Browser     TTL = 86400s  (24 heures)   <-- DANGER !
-  CDN         TTL = 3600s   (1 heure)
-  App Cache   TTL = 60s     (1 minute)
-
-Probleme : meme si on purge le CDN et l'app cache,
-le navigateur sert du contenu stale pendant 24h !
-On ne peut PAS purger le cache navigateur de l'exterieur.
+❌ UPDATE activities SET meet_at='17:00' WHERE id=42;   // et c'est tout
 ```
 
-### 6.3 Configuration type par scenario
+La base est à jour, mais les quatre couches au-dessus servent encore l'ancienne valeur jusqu'à expiration. **Correct :** déclencher une **invalidation en cascade** après l'écriture (app → proxy → CDN), et compter sur un `max-age` court pour le navigateur.
+
+### PIÈGE #2 — Invalider de l'extérieur vers l'intérieur
 
 ```
-Page produit e-commerce :
-  Browser : max-age=30, stale-while-revalidate=60
-  CDN :     CDN-Cache-Control: max-age=300
-  Proxy :   TTL 120s
-  Redis :   EXPIRE 3600
+❌ purge CDN, PUIS del app cache
+```
 
-API de recherche :
-  Browser : no-cache (revalide toujours)
-  CDN :     CDN-Cache-Control: max-age=60
-  Proxy :   TTL 30s
-  Redis :   EXPIRE 300
+Entre les deux, une requête recharge le CDN depuis un app cache **encore périmé** → on re-cache du stale pour tout un TTL. **Correct :** toujours **inside-out** — source d'abord, puis app, puis proxy, puis CDN.
 
-Assets statiques (avec hash) :
-  Browser : max-age=31536000, immutable
-  CDN :     max-age=31536000, immutable
-  Proxy :   TTL 31536000
-  Redis :   N/A (pas besoin)
+### PIÈGE #3 — `max-age` long au navigateur « pour la perf »
+
+```
+❌ Cache-Control: max-age=86400   sur une donnée qui change
+```
+
+Le navigateur est **impossible à purger** : tu es coincé 24 h même en purgeant tout le reste. **Correct :** navigateur = TTL le plus court de la pile (ou `no-cache`) ; c'est le CDN/proxy qui portent les longs TTL, car eux sont purgeables.
+
+### PIÈGE #4 — Confondre purge et expiration face au stampede
+
+Purger une clé très populaire, c'est **déclencher** un stampede : juste après la purge, tout le monde rate le cache en même temps.
+
+```
+❌ purge brutale d'une clé chaude sans parade
+```
+
+**Correct :** combiner **soft purge** / `stale-while-revalidate` (on sert stale pendant la régénération) et **coalescing/lock** (une seule régénération). On ne laisse jamais une clé chaude passer de « fraîche » à « vide » d'un coup.
+
+### PIÈGE #5 — `Vary` trop large qui tue le cache partagé
+
+```
+❌ Vary: User-Agent    // ou Vary: Cookie
+```
+
+La clé de cache inclut l'en-tête varié → quasiment **une entrée par visiteur** → taux de HIT ~0, la couche partagée ne sert plus à rien. **Correct :** ne `Vary` que sur ce qui change **réellement** la représentation partageable (`Accept-Encoding`, éventuellement `Accept-Language`). Ce qui dépend de l'utilisateur → `private`/`no-store`, pas `Vary`.
+
+### PIÈGE #6 — Confondre cache HTTP (couches 1-3) et cache applicatif (couche 4)
+
+Le cache applicatif (Redis, Map) **n'obéit pas** à `Cache-Control` : poser `max-age=60` sur la réponse ne fixe pas le TTL de ta clé Redis. Ce sont **deux mécanismes** avec **deux clés** et **deux invalidations**. **Correct :** piloter le HTTP avec les en-têtes, le cache applicatif avec ton code (`EXPIRE`, `DEL`), et penser l'invalidation en cascade **des deux**.
+
+---
+
+## 5. Ancrage TribuZen
+
+TribuZen sert son trafic à travers la pile complète, ressource par ressource :
+
+| Ressource | Navigateur | CDN | Reverse proxy | App cache | Invalidation |
+|---|---|---|---|---|---|
+| `/assets/*.[hash].js` | `max-age=31536000, immutable` | idem | passe-plat | — | jamais (hash) |
+| `GET /api/families` (annuaire public) | `max-age=30` | `s-maxage=300` + tag `families` | TTL 120 s | `families:list` EX 600 | cascade sur création/edit famille |
+| `GET /api/activities/:id` | `max-age=30` | `s-maxage=120` + tag `activity-<id>` | TTL 60 s | `activity:<id>` EX 3600 | cascade sur edit activité |
+| `GET /api/me` | `no-store` | bypass | bypass | — | jamais caché (cohérence forte) |
+
+Orchestration concrète dans `smaurier/tribuzen` :
+
+- **Invalidation en cascade** : quand un organisateur édite l'activité 42, un `ActivitiesService` (NestJS) exécute, **dans cet ordre** : `UPDATE` PostgreSQL → `redis.del('activity:42')` + `redis.del('activities:list:*')` concernées → `PURGE` nginx → purge CDN par surrogate key `activity-42`. Le navigateur, lui, converge en ≤ 30 s (`max-age`).
+- **Anti-stampede** : les fiches d'activités très consultées (une sortie virale) passent par un **single-flight** applicatif (Exemple 2) + `stale-while-revalidate` au CDN (module 06). À l'expiration de la clé chaude, une seule requête SQL part, tout le monde est servi en stale entre-temps.
+- **Cohérence forte réservée** : `/api/me` et les documents personnels sont en `no-store` (module 04) — on ne tente pas de synchroniser cinq couches pour de la donnée sensible, on la sort simplement du cache.
+
+Fichiers cibles :
+
+```
+tribuzen/
+  api/src/activities/activities.service.ts       # invalidation en cascade inside-out
+  api/src/common/cache/single-flight.ts          # request coalescing anti-stampede
+  api/src/common/cache/cascade-invalidator.ts    # orchestre app -> proxy -> CDN
+  infra/nginx.conf                               # reverse proxy : TTL + PURGE
 ```
 
 ---
 
-## Points clés
+## 6. Points clés
 
-1. Une requête peut traverser **5 couches de cache** : Browser, CDN, Reverse Proxy, App Cache, DB.
-2. La **coherence eventuelle** est acceptable pour la plupart des cas ; la coherence forte est reservee aux donnees critiques (finance, auth).
-3. L'**invalidation en cascade** doit se faire de l'interieur vers l'exterieur : DB -> App Cache -> Proxy -> CDN -> (Browser : impossible).
-4. Les **Surrogate Keys** (cache tags) permettent d'invalider toutes les URLs liees à une entite en une seule operation.
-5. **Write-Through** garantit la coherence cache/DB mais double la latence d'écriture.
-6. **Write-Behind** offre des ecritures ultra-rapides mais risque la perte de donnees.
-7. Le **TTL doit decroitre** en s'eloignant de la source : Redis (long) > CDN (moyen) > Browser (court).
-8. Le cache navigateur est **impossible a invalider de l'exterieur** -- c'est pour ça qu'il doit avoir le TTL le plus court ou utiliser `no-cache`.
-
----
-
-## Lab associe
-
-> Lab 09 — Construire un système de cache a 3 couches (in-memory, reverse proxy, CDN simule) avec invalidation en cascade et purge par tag
+1. Une requête traverse jusqu'à **cinq couches** : navigateur (privé) → CDN → reverse proxy → app cache → base. Les 1-3 cachent des **réponses HTTP**, la 4 des **objets métier** (pas de `Cache-Control`).
+2. **TTL décroissant vers le client** : le navigateur, impossible à purger, reçoit le TTL le plus court ; les couches purgeables portent les longs TTL.
+3. La **clé de cache HTTP** = méthode + URL + en-têtes cités dans `Vary` ; un `Vary` trop large fragmente et détruit le taux de HIT.
+4. **Cohérence** : éventuelle (fenêtre de stale bornée) pour la plupart des données ; forte (souvent = `no-store`) pour le critique.
+5. **Invalidation en cascade inside-out** : base → app → proxy → CDN → (navigateur : impossible) ; les surrogate keys purgent toutes les URLs d'une entité d'un coup.
+6. **Cache stampede / thundering herd** : à l'expiration d'une clé chaude, toutes les requêtes ratent le cache et saturent la base. Parades : **request coalescing / single-flight**, **lock distribué**, **probabilistic early expiration**, **stale-while-revalidate**.
+7. **`Age` et `X-Cache`** sont les sondes pour tracer où une requête a fait HIT ou MISS à travers la pile.
 
 ---
 
-## Pour aller plus loin
-
-- [Architecture of a Multi-Layer Cache](https://www.varnish-software.com/developers/tutorials/multi-tier-caching/)
-- [Redis Caching Patterns](https://redis.io/docs/manual/patterns/)
-- [Fastly - Surrogate Keys Cookbook](https://docs.fastly.com/en/guides/purging-api-cache-with-surrogate-keys)
-- [Facebook - TAO: Distributed Data Store for the Social Graph](https://www.usenix.org/conference/atc13/technical-sessions/presentation/bronson)
-- [Martin Fowler - Cache Stratégies](https://martinfowler.com/bliki/TwoHardThings.html)
-
----
-
-## Si tu es perdu
-
-Imagine un supermarche :
-
-- **La DB**, c'est le producteur agricole (source de verite)
-- **Redis**, c'est l'entrepot du supermarche (stock en gros, rapide a acceder)
-- **Le reverse proxy**, c'est le rayon du magasin (visible, pre-arrange)
-- **Le CDN**, c'est le supermarche le plus pres de chez toi (geographiquement proche)
-- **Le browser cache**, c'est ton frigo à la maison (le plus rapide mais tu ne peux pas le vider a distance)
-
-Quand un produit est rappele (invalidation), il faut :
-1. Prevenir le producteur (DB : mise a jour)
-2. Retirer du stock en entrepot (Redis : DEL)
-3. Retirer du rayon (Proxy : PURGE)
-4. Prevenir tous les supermarches (CDN : purge par tag)
-5. Ton frigo ? On ne peut que mettre une date de peremption courte (TTL court) et esperer que tu verifies !
-
----
-
-## Defi
-
-### Enonce
-
-Tu geres un site e-commerce avec :
-- 10 000 produits en DB
-- Redis avec un TTL de 1h par produit
-- Varnish comme reverse proxy (TTL 5 min)
-- Cloudflare comme CDN (TTL 10 min)
-- Browser cache avec `max-age=60`
-
-Le produit 42 passe en promotion (-50%). Decris **étape par étape** ce qui se passe pour :
-
-1. La mise a jour initiale
-2. Un utilisateur qui avait déjà la page en cache navigateur
-3. Un utilisateur dans un POP CDN qui n'a pas encore recu la purge
-4. Quel est le temps maximum avant que TOUS les utilisateurs voient le nouveau prix ?
-
-### Reponse
+## 7. Seeds Anki
 
 ```
-1. Mise a jour initiale :
-   a) UPDATE db SET prix = 44.99 WHERE id = 42
-   b) redis.del('product:42')
-   c) Varnish: PURGE /produit/42
-   d) Cloudflare API: purge par tag "product-42"
-   Temps : ~2 secondes pour tout invalider
-
-2. Utilisateur avec cache navigateur :
-   - Il voit encore l'ancien prix (89.99 EUR)
-   - Pendant max 60 secondes (max-age=60)
-   - Au prochain chargement apres 60s, il revalide
-   - Il obtient le nouveau prix
-
-3. Utilisateur dans un POP non purge :
-   - Cloudflare purge en ~30 secondes (tous les POPs)
-   - Pendant ces 30s, certains POPs peuvent servir le stale
-   - Apres purge, prochaine requete = miss = origin = nouveau prix
-
-4. Temps maximum avant convergence :
-   - CDN purge : ~30s
-   - Browser max-age : 60s
-   - PIRE CAS : un utilisateur a charge la page a T-1s,
-     le cache expire a T+59s, le CDN est purge a T+30s
-     --> Max 60 secondes (dicte par le browser cache)
-
-   C'est pour ca que le browser doit avoir le TTL le plus court !
+Quelles sont les 5 couches de cache d'une requête et laquelle est impossible à purger ?|Navigateur (privé) -> CDN -> reverse proxy -> app cache -> base. Le cache navigateur est impossible à purger de l'extérieur : sa seule borne est le max-age qu'on lui a donné, d'où la règle du TTL le plus court pour lui.
+Pourquoi le TTL doit-il décroître à mesure qu'on se rapproche du client ?|Plus une couche est loin de la source, plus elle est difficile à invalider. Le navigateur ne se purge pas du tout -> TTL court. Les couches purgeables (CDN, proxy, app) peuvent porter des TTL longs car on peut les invalider activement.
+Dans quel ordre invalider les couches après une écriture, et pourquoi ?|Inside-out : base -> app cache -> reverse proxy -> CDN -> (navigateur impossible). Si on purgeait le CDN avant l'app cache, une requête pourrait recharger le CDN depuis un app cache encore périmé et re-cacher du stale.
+Qu'est-ce qu'un cache stampede (thundering herd) ?|Quand une clé populaire expire ou est purgée, toutes les requêtes concurrentes ratent le cache en même temps et se ruent sur la couche du dessous (jusqu'à la base), qui sature. Le cache censé protéger la base devient la cause de la panne au moment où il expire.
+Cite trois parades au cache stampede.|1) Request coalescing / single-flight : une seule régénération, les autres attendent la même promesse. 2) Lock distribué (SET NX) quand le cache est partagé entre serveurs. 3) Probabilistic early expiration (XFetch) : recalcul anticipé avec probabilité croissante. Bonus : stale-while-revalidate sert du stale pendant la régénération.
+De quoi est composée une clé de cache HTTP, et quel est le risque d'un Vary trop large ?|Clé = méthode + URL + valeurs des en-têtes listés dans Vary. Un Vary trop large (User-Agent, Cookie) crée quasiment une entrée par visiteur -> taux de HIT proche de zéro, la couche partagée ne sert plus à rien.
+Quelle est la différence entre cache HTTP (couches 1-3) et cache applicatif (couche 4) ?|Les couches 1-3 cachent des réponses HTTP pilotées par les en-têtes (Cache-Control, ETag). La couche 4 (Redis, Map) cache des objets métier et n'obéit pas aux en-têtes : c'est le code qui fixe la clé et le TTL (SET/DEL/EXPIRE). Deux mécanismes, deux invalidations.
+À quoi servent les en-têtes Age et X-Cache pour diagnostiquer un multi-couches ?|Age (standard) = secondes depuis la génération à l'origine : Age 0/absent = vient de l'origine, Age élevé = servi par un cache partagé. X-Cache (non standard, ajouté par CDN/proxy) = HIT/MISS de la couche. Ensemble ils tracent où la requête a fait HIT dans la pile.
 ```
 
 ---
 
-## Navigation
+## Pont vers le lab
 
-| Précédent | Suivant |
-|:---------:|:-------:|
-| [Module 08 — CDN](./08-cdn.md) | [Module 10 — SSR et Cache](./10-ssr.md) |
-
----
-
-<!-- parcours-recommande -->
-
-::: tip Parcours recommandé
-1. **Screencast** : [screencast 09 cache multi couches](../screencasts/screencast-09-cache-multi-couches.md)
-2. **Lab** : [lab-08-reverse-proxy-cache](../labs/lab-08-reverse-proxy-cache/README)
-3. **Visualisation** : [Multi-Layer Cache](../visualizations/multi-layer-cache.html)
-4. **Quiz** : [quiz 09 multi layer](../quizzes/quiz-09-multi-layer.html)
-:::
+> Lab associé : `11-http-caching/labs/lab-09-cache-multi-couches/README.md`. Monter une pile navigateur → reverse proxy → app cache → base avec un vrai serveur Node, estampiller chaque couche (`X-Cache`, `Age`, `Surrogate-Key`), **tracer une requête** à travers les couches avec `curl -I`, provoquer puis **désamorcer un cache stampede** avec du single-flight, et orchestrer une **invalidation en cascade** après mutation.

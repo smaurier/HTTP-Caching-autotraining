@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quiz 01 — Le Protocole HTTP</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; padding: 2rem 1rem; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { text-align: center; margin-bottom: 0.5rem; font-size: 1.8rem; color: #ffffff; }
+    .subtitle { text-align: center; color: #8892b0; margin-bottom: 2rem; font-size: 1rem; }
+    .progress-bar-container { background: #0d1117; border-radius: 10px; height: 14px; margin-bottom: 2rem; overflow: hidden; }
+    .progress-bar { background: linear-gradient(90deg, #0d6efd, #4dabf7); height: 100%; width: 0%; border-radius: 10px; transition: width 0.4s ease; }
+    .progress-text { text-align: center; color: #8892b0; margin-bottom: 1rem; font-size: 0.9rem; }
+    .card { background: #16213e; border-radius: 12px; padding: 2rem; margin-bottom: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+    .question-label { font-size: 0.85rem; color: #4dabf7; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem; }
+    .question-text { font-size: 1.15rem; margin-bottom: 1.2rem; line-height: 1.5; color: #ffffff; }
+    pre { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; margin-bottom: 1.2rem; overflow-x: auto; font-size: 0.95rem; }
+    code { font-family: 'Consolas', 'Fira Code', 'Courier New', monospace; color: #c9d1d9; }
+    .options { list-style: none; }
+    .options li { margin-bottom: 0.5rem; }
+    .options label { display: flex; align-items: center; gap: 0.75rem; padding: 0.8rem 1rem; background: #0d1117; border: 2px solid #30363d; border-radius: 8px; cursor: pointer; transition: border-color 0.2s, background 0.2s; font-size: 1rem; }
+    .options label:hover { border-color: #4dabf7; background: #1c2a4a; }
+    .options input[type="radio"] { accent-color: #0d6efd; width: 18px; height: 18px; flex-shrink: 0; }
+    .btn { display: inline-block; padding: 0.7rem 2rem; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background 0.2s, transform 0.1s; }
+    .btn-primary { background: #0d6efd; color: #fff; }
+    .btn-primary:hover { background: #3b82f6; }
+    .btn-primary:disabled { background: #374151; cursor: not-allowed; }
+    .btn-restart { background: #238636; color: #fff; margin-top: 1rem; padding: 0.7rem 2rem; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; }
+    .btn-restart:hover { background: #2ea043; }
+    .feedback { margin-top: 1rem; padding: 1rem 1.2rem; border-radius: 8px; font-size: 0.95rem; line-height: 1.5; display: none; }
+    .feedback.correct { background: #0f5132; border: 1px solid #198754; color: #d1fae5; display: block; }
+    .feedback.wrong { background: #842029; border: 1px solid #dc3545; color: #fdd; display: block; }
+    .score-card { text-align: center; padding: 3rem 2rem; }
+    .score-card .score { font-size: 3rem; font-weight: 700; color: #4dabf7; margin-bottom: 0.5rem; }
+    .score-card .score-label { font-size: 1.2rem; color: #8892b0; margin-bottom: 1.5rem; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Quiz 01 — Le Protocole HTTP</h1>
+    <p class="subtitle">Méthodes, status codes et anatomie d'une requête/réponse</p>
+    <div class="progress-bar-container"><div class="progress-bar" id="progressBar"></div></div>
+    <p class="progress-text" id="progressText">Question 1 / 5</p>
+    <div id="quizContainer"></div>
+    <div id="scoreContainer" class="card score-card hidden"></div>
+  </div>
+  <script>
+    const questions = [
+      {
+        label: "Concept",
+        text: "Quelle est la différence fondamentale entre les méthodes HTTP GET et POST en termes de caching ?",
+        code: null,
+        options: [
+          "GET et POST sont toutes deux cachées par défaut",
+          "Les réponses GET sont cachées par défaut, les réponses POST ne le sont pas",
+          "Seules les réponses POST peuvent être cachées car elles contiennent un body",
+          "Aucune méthode HTTP n'est cachée par défaut, il faut toujours un header explicite"
+        ],
+        answer: 1,
+        explanation: "Par défaut, les caches HTTP stockent les réponses aux requêtes GET (et HEAD). Les réponses POST ne sont généralement pas cachées sauf indication explicite, car POST est conçu pour des actions qui modifient l'état du serveur (non-idempotent)."
+      },
+      {
+        label: "Concept",
+        text: "Quel code de statut HTTP indique qu'une ressource n'a pas été modifiée et que le client peut utiliser sa copie en cache ?",
+        code: null,
+        options: [
+          "200 OK",
+          "204 No Content",
+          "301 Moved Permanently",
+          "304 Not Modified"
+        ],
+        answer: 3,
+        explanation: "Le code 304 Not Modified est renvoyé par le serveur en réponse à une requête conditionnelle (avec If-None-Match ou If-Modified-Since). Il indique que la ressource n'a pas changé : le client peut réutiliser sa copie en cache, économisant le transfert du body."
+      },
+      {
+        label: "Prédiction",
+        text: "Quelle sera la réponse du serveur à cette requête conditionnelle, sachant que la ressource n'a pas changé ?",
+        code: "GET /styles/main.css HTTP/1.1\nHost: cdn.example.com\nIf-None-Match: \"a3f2b8c1\"\n\n--- La ressource sur le serveur a toujours ETag: \"a3f2b8c1\" ---",
+        options: [
+          "200 OK avec le fichier CSS complet dans le body",
+          "304 Not Modified sans body",
+          "204 No Content",
+          "412 Precondition Failed"
+        ],
+        answer: 1,
+        explanation: "Le header If-None-Match envoie l'ETag connu du client. Le serveur compare avec l'ETag actuel de la ressource. Comme ils correspondent (\"a3f2b8c1\"), le serveur répond 304 Not Modified sans body, économisant la bande passante."
+      },
+      {
+        label: "Code",
+        text: "Analysez cette réponse HTTP. Quels headers sont pertinents pour le caching ?",
+        code: "HTTP/1.1 200 OK\nDate: Sat, 07 Mar 2026 10:00:00 GMT\nContent-Type: text/html; charset=utf-8\nContent-Length: 4523\nCache-Control: public, max-age=3600\nETag: \"v2.1-abc123\"\nVary: Accept-Encoding\nX-Powered-By: Express",
+        options: [
+          "Content-Type, Content-Length et X-Powered-By",
+          "Cache-Control, ETag, Vary et Date",
+          "Uniquement Cache-Control car c'est le seul header de cache",
+          "Tous les headers influencent le caching"
+        ],
+        answer: 1,
+        explanation: "Cache-Control définit la politique de cache (public, durée 1h). ETag permet la validation conditionnelle future. Vary indique que le cache dépend de Accept-Encoding (gzip vs brotli). Date permet de calculer l'âge de la réponse. Les autres headers (Content-Type, X-Powered-By) n'influencent pas le caching."
+      },
+      {
+        label: "Pourquoi ?",
+        text: "Pourquoi la méthode HTTP PUT est-elle considérée comme « idempotente » alors que POST ne l'est pas, et quel impact cela a-t-il sur le caching ?",
+        code: null,
+        options: [
+          "PUT est idempotent car plusieurs appels identiques produisent le même résultat ; les caches peuvent donc rejouer une requête PUT sans risque de duplication",
+          "PUT et POST sont tous deux non-idempotents, ce qui interdit leur mise en cache",
+          "L'idempotence n'a aucun rapport avec le caching HTTP",
+          "PUT est idempotent car il ne modifie jamais l'état du serveur"
+        ],
+        answer: 0,
+        explanation: "PUT est idempotent : envoyer la même requête PUT plusieurs fois donne le même résultat final (la ressource est remplacée par la même valeur). POST n'est pas idempotent : chaque appel peut créer une nouvelle ressource. Cependant, en pratique, ni PUT ni POST ne sont cachés par défaut. L'idempotence influence surtout la possibilité de « retry » sûr en cas d'erreur réseau."
+      }
+    ];
+    let currentQuestion = 0, score = 0, answered = false;
+    function renderQuestion() {
+      answered = false;
+      const q = questions[currentQuestion];
+      document.getElementById('progressBar').style.width = ((currentQuestion / questions.length) * 100) + '%';
+      document.getElementById('progressText').textContent = `Question ${currentQuestion + 1} / ${questions.length}`;
+      let html = `<div class="card"><p class="question-label">${q.label} — Question ${currentQuestion + 1}</p><p class="question-text">${q.text}</p>`;
+      if (q.code) html += `<pre><code>${q.code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></pre>`;
+      html += `<ul class="options">`;
+      q.options.forEach((opt, i) => { html += `<li><label><input type="radio" name="q${currentQuestion}" value="${i}"><span>${opt}</span></label></li>`; });
+      html += `</ul><div style="margin-top:1rem;"><button class="btn btn-primary" id="validateBtn" onclick="validate()">Valider</button></div><div class="feedback" id="feedback"></div></div>`;
+      document.getElementById('quizContainer').innerHTML = html;
+    }
+    function validate() {
+      if (answered) { nextQuestion(); return; }
+      const sel = document.querySelector(`input[name="q${currentQuestion}"]:checked`);
+      if (!sel) return;
+      answered = true;
+      const val = parseInt(sel.value), q = questions[currentQuestion], fb = document.getElementById('feedback'), btn = document.getElementById('validateBtn');
+      document.querySelectorAll(`input[name="q${currentQuestion}"]`).forEach(r => r.disabled = true);
+      if (val === q.answer) { score++; fb.className = 'feedback correct'; fb.innerHTML = `<strong>Correct !</strong><br>${q.explanation}`; }
+      else { fb.className = 'feedback wrong'; fb.innerHTML = `<strong>Incorrect</strong> — La bonne réponse était : <em>${q.options[q.answer]}</em><br><br>${q.explanation}`; }
+      btn.textContent = currentQuestion < questions.length - 1 ? 'Suivant' : 'Voir le score';
+    }
+    function nextQuestion() { currentQuestion++; if (currentQuestion < questions.length) renderQuestion(); else showScore(); }
+    function showScore() {
+      document.getElementById('quizContainer').classList.add('hidden');
+      document.getElementById('progressBar').style.width = '100%';
+      document.getElementById('progressText').textContent = 'Terminé !';
+      const sc = document.getElementById('scoreContainer'); sc.classList.remove('hidden');
+      sc.innerHTML = `<div class="score">${score} / ${questions.length}</div><p class="score-label">${score === questions.length ? 'Parfait ! Excellente maîtrise !' : score >= 3 ? 'Bon travail ! Révisez les points manqués.' : 'Continuez à étudier, vous progresserez !'}</p><button class="btn-restart" onclick="restart()">Recommencer</button>`;
+    }
+    function restart() { currentQuestion = 0; score = 0; document.getElementById('scoreContainer').classList.add('hidden'); document.getElementById('quizContainer').classList.remove('hidden'); renderQuestion(); }
+    renderQuestion();
+  </script>
+</body>
+</html>

@@ -1,706 +1,322 @@
-# Module 00 — Prérequis & Vue d'ensemble
+---
+titre: Prérequis et vue d'ensemble — HTTP & Caching
+cours: 11-http-caching
+notions: [modèle client-serveur requête-réponse, rôle central de HTTP, caching comme levier de perf n°1, latence et coût serveur, couches de cache navigateur CDN reverse-proxy application BDD, cache hit et cache miss, fresh vs stale, carte du cours, outils DevTools et curl]
+outcomes: [expliquer le cycle requête-réponse HTTP, justifier pourquoi le caching est le premier levier de performance, situer chaque couche de cache dans la chaîne, observer les en-têtes de cache avec DevTools et curl]
+prerequis: []
+next: 01-protocole-http
+libs: []
+tribuzen: chaîne de cache complète de TribuZen (API + admin web + mobile) — réduire latence et coût serveur à chaque couche
+last-reviewed: 2026-07
+---
 
-<!-- nav-cours-précédent -->
-> **Cours précédent** : [PostgreSQL](../../06-postgresql/modules/18-partitioning-et-scaling.md). Si tu arrives ici sans avoir fait les cours précédents, consulte le [guide de démarrage](../../GUIDE-DEMARRAGE.md).
+# Prérequis et vue d'ensemble — HTTP & Caching
 
+> **Outcomes — tu sauras FAIRE :** expliquer le cycle requête-réponse HTTP, justifier pourquoi le caching est le premier levier de performance, situer chaque couche de cache dans la chaîne, observer les en-têtes de cache avec DevTools et curl.
+> **Difficulté :** :star:
 
-> **Objectif** : Comprendre les fondations du protocole HTTP, savoir pourquoi le caching existe, et preparer son environnement de travail.
-> **Difficulte** : ⭐ (Débutant)
+## 1. Cas concret d'abord
+
+L'admin TribuZen affiche la liste des familles d'un espace. Chaque ouverture de page déclenche un `GET /api/families`. En prod, un pic est repéré : à l'heure d'affluence du soir, l'API sature et les temps de réponse passent de 120 ms à 900 ms. Le tableau de bord de coût cloud grimpe aussi : la même requête part vers la base de données des milliers de fois par minute, alors que la liste des familles change à peine une fois par jour.
+
+Ouvre l'onglet **Network** de Chrome DevTools sur cette page et observe une requête réelle :
+
+```
+Name              Status  Type   Size            Time
+families          200     xhr    18.4 kB         870 ms
+avatar-42.png     200     png    (disk cache)    0 ms
+app.css           304     css    (memory cache)  2 ms
+```
+
+Deux constats sautent aux yeux :
+
+- `avatar-42.png` et `app.css` sont servis **depuis le cache** (`0 ms`, `304`) : le navigateur ne redemande rien au serveur.
+- `families` repart **à chaque fois** vers l'API (`870 ms`, vraie taille en octets) : aucun cache ne l'intercepte.
+
+La question du cours entier tient dans cet écart. Pourquoi certaines ressources coûtent 0 ms et d'autres 870 ms ? Comment fait-on pour que `families` — qui change une fois par jour — se comporte comme `app.css` ? Ce module pose la carte ; les suivants donnent les outils précis, en-tête par en-tête.
 
 ---
 
-## 1. Qu'est-ce que HTTP ?
+## 2. Théorie complète, concise
 
-### 1.1 L'analogie du courrier postal
+### 2.1 HTTP : le modèle client-serveur requête-réponse
 
-Imaginons que tu veuilles envoyer une lettre à un ami dans une autre ville.
-
-```
-TOI (expediteur)                          TON AMI (destinataire)
-     |                                           |
-     |  1. Tu ecris une lettre                   |
-     |  2. Tu mets l'adresse sur l'enveloppe     |
-     |  3. Tu la deposes a la poste               |
-     |                                           |
-     |   -----> [Bureau de poste local] ---->    |
-     |          [Centre de tri]                  |
-     |          [Bureau de poste distant] ---->  |
-     |                                           |
-     |  4. Ton ami recoit la lettre              |
-     |  5. Il lit le contenu                     |
-     |  6. Il ecrit une reponse                  |
-     |                                           |
-     |   <---- [Chemin inverse] <-----------     |
-     |                                           |
-     |  7. Tu recois la reponse                  |
-```
-
-**HTTP fonctionne exactement comme ça** :
-
-| Courrier postal        | HTTP                              |
-|------------------------|-----------------------------------|
-| Toi (expediteur)       | Le navigateur (client)            |
-| Ton ami (destinataire) | Le serveur web                    |
-| L'adresse              | L'URL (`https://example.com`)     |
-| Le contenu de la lettre| Le body de la requête/réponse     |
-| L'enveloppe            | Les headers HTTP                  |
-| La poste               | Internet (routeurs, DNS, etc.)    |
-| Le type de lettre      | La méthode HTTP (GET, POST, etc.) |
-
-### 1.2 Definition formelle
-
-**HTTP** (HyperText Transfer Protocol) est un protocole de communication **client-serveur** qui fonctionne sur le modèle **requête-réponse**.
+**HTTP** (HyperText Transfer Protocol) est le protocole qui régit *toute* communication sur le web : page, image, feuille de style, appel d'API. Il fonctionne selon un modèle **client-serveur** en **requête-réponse** : le client (navigateur, app mobile, `curl`) envoie une requête, le serveur renvoie une réponse. Un aller, un retour. Jamais l'inverse spontanément.
 
 ```
-Client (navigateur)              Serveur (ex: nginx, Node.js)
-        |                                |
-        |  --- Requete HTTP ---------->  |
-        |  GET /index.html HTTP/1.1      |
-        |  Host: example.com             |
-        |                                |
-        |  <-- Reponse HTTP -----------  |
-        |  HTTP/1.1 200 OK               |
-        |  Content-Type: text/html       |
-        |  <html>...</html>              |
-        |                                |
+Client (navigateur)                    Serveur (API TribuZen)
+   |                                        |
+   |  --- Requête ------------------------> |
+   |  GET /api/families HTTP/1.1            |
+   |  Host: api.tribuzen.app               |
+   |  Accept: application/json             |
+   |                                        |
+   |  <-- Réponse ------------------------  |
+   |  HTTP/1.1 200 OK                       |
+   |  Content-Type: application/json        |
+   |  Cache-Control: max-age=60             |
+   |  [ { "id": 1, ... }, ... ]             |
 ```
 
-**Pourquoi c'est important ?** Chaque page web, chaque image, chaque fichier CSS que tu consultes passe par HTTP. Comprendre HTTP, c'est comprendre le coeur du web.
+Trois propriétés fondamentales structurent tout le reste du cours :
 
-### 1.3 Les caracteristiques fondamentales
+1. **Sans état (stateless)** : chaque requête est indépendante ; le serveur ne se souvient pas de la précédente. C'est *justement* ce qui rend le caching possible et sûr — une réponse peut être stockée et rejouée sans casser un contexte serveur.
+2. **Basé sur du texte** : requêtes et réponses sont lisibles à l'œil. On peut inspecter et déboguer un cache en lisant les en-têtes bruts.
+3. **Extensible via les en-têtes** : le comportement du cache se pilote entièrement par des en-têtes (`Cache-Control`, `ETag`, `Vary`…), pas par le corps du message.
 
-HTTP possede trois propriétés essentielles :
+### 2.2 Requête et réponse : anatomie minimale
 
-1. **Sans état (stateless)** : Chaque requête est independante. Le serveur ne "se souvient" pas des requêtes precedentes. C'est comme si à chaque lettre, tu devais re-écrire ton adresse de retour.
-
-2. **Base sur du texte** : Les messages HTTP sont lisibles par un humain (contrairement a des protocoles binaires). Tu peux lire une requête HTTP comme tu lis une lettre.
-
-3. **Extensible** : On peut ajouter des headers personnalises. C'est comme ajouter des post-it sur l'enveloppe avec des instructions supplementaires.
+Une requête = une **méthode** (`GET`, `POST`…) + une **URL** + des **en-têtes** + un **corps** optionnel. Une réponse = un **status code** (200, 304, 404…) + des **en-têtes** + un **corps** optionnel. Le cache s'appuie presque uniquement sur les en-têtes ; c'est pour ça que le cours passe rapidement au décorticage des en-têtes.
 
 ```
-# Exemple d'une requete HTTP brute, lisible par un humain
-GET /api/users HTTP/1.1          # Methode + chemin + version
-Host: api.example.com            # Adresse du serveur
-Accept: application/json         # "Je veux du JSON en reponse"
-Authorization: Bearer abc123     # "Voici mon badge d'acces"
+# Requête brute
+GET /api/families HTTP/1.1
+Host: api.tribuzen.app
+Accept: application/json
+If-None-Match: "v3-families"     # "j'ai déjà la version v3, est-elle encore bonne ?"
+
+# Réponse brute (le serveur confirme sans renvoyer le corps)
+HTTP/1.1 304 Not Modified
+ETag: "v3-families"
+Cache-Control: max-age=60
 ```
 
----
+### 2.3 Pourquoi le caching est LE levier de perf n°1
 
-## 2. Pourquoi le caching ?
+Le caching, c'est **garder une copie de la réponse** pour éviter de refaire le travail. Il attaque simultanément les trois coûts d'une requête web :
 
-### 2.1 La latence est l'ennemi numéro 1
+- **La latence.** Un aller-retour réseau coûte cher, et les ordres de grandeur sont impitoyables :
 
-Imagine que tu demandes un livre à la bibliotheque municipale (le serveur). Le trajet prend 30 minutes aller-retour. Si tu as besoin du même livre 5 fois dans la journee, tu fais 5 allers-retours de 30 minutes chacun. **2h30 perdues.**
+  | Opération | Latence typique |
+  |---|---|
+  | Lire depuis le cache mémoire (RAM) | ~1 ms |
+  | Lire depuis le cache disque | ~5 ms |
+  | Requête vers un CDN proche | ~30 ms |
+  | Requête vers le serveur d'origine | ~100–300 ms |
+  | Requête + calcul BDD lourd | ~500–2000 ms |
 
-Maintenant, imagine que tu gardes une copie du livre sur ton bureau (le cache). Les 4 prochaines fois, tu prends le livre directement sur ton bureau. **Temps : quasi zero.**
+  Un cache hit en RAM est **100 à 1000× plus rapide** qu'un aller à l'origine. Aucune optimisation de code ne rivalise avec « ne pas faire la requête du tout ».
 
-```
-SANS CACHE (5 requetes identiques)
-==================================
+- **Le coût serveur.** Chaque requête évitée, c'est du CPU, de la BDD et de la bande passante non consommés. Sur `GET /api/families`, mettre 60 s de cache divise la charge origine par le nombre de lecteurs pendant cette minute. À l'échelle, c'est la différence entre 1 serveur et 10.
 
-Requete 1: Navigateur ---> Serveur ---> Navigateur  (200ms)
-Requete 2: Navigateur ---> Serveur ---> Navigateur  (200ms)
-Requete 3: Navigateur ---> Serveur ---> Navigateur  (200ms)
-Requete 4: Navigateur ---> Serveur ---> Navigateur  (200ms)
-Requete 5: Navigateur ---> Serveur ---> Navigateur  (200ms)
-                                            Total:  1000ms
+- **La scalabilité.** Un cache absorbe les pics. Si 5000 utilisateurs ouvrent le tableau de bord à 20 h, un cache partagé (CDN / reverse proxy) sert une seule réponse origine et la rejoue 5000 fois. Sans cache, ce sont 5000 requêtes qui frappent la base.
 
+Les chiffres métier confirment l'enjeu : Google et Amazon estiment que **+100 ms de latence ≈ −1 % de revenus**, et 53 % des visiteurs mobiles abandonnent un site qui dépasse 3 s de chargement. La performance web *est* du chiffre d'affaires.
 
-AVEC CACHE (5 requetes identiques)
-===================================
+### 2.4 Les couches de cache : de l'utilisateur à la source de vérité
 
-Requete 1: Navigateur ---> Serveur ---> Navigateur  (200ms)
-             |                                |
-             +--- Stocke en cache <-----------+
-Requete 2: Navigateur ---> Cache local               (1ms)
-Requete 3: Navigateur ---> Cache local               (1ms)
-Requete 4: Navigateur ---> Cache local               (1ms)
-Requete 5: Navigateur ---> Cache local               (1ms)
-                                            Total:   204ms
-
-Gain : ~80% plus rapide !
-```
-
-### 2.2 Les chiffres qui font mal
-
-Voici les latences typiques pour différentes operations :
-
-| Operation                        | Latence typique |
-|----------------------------------|-----------------|
-| Lire depuis le cache mémoire     | ~1 ms           |
-| Lire depuis le cache disque      | ~5 ms           |
-| Requête sur le réseau local      | ~10 ms          |
-| Requête vers un CDN proche       | ~30 ms          |
-| Requête vers un serveur distant  | ~100-300 ms     |
-| Requête vers un serveur lent     | ~500-2000 ms    |
-
-**Pourquoi ça compte ?**
-
-- Google a montre qu'un delai de **100ms** supplementaires fait perdre **1% de revenus**.
-- Amazon estime que **chaque 100ms** de latence en plus coute **1% de ventes**.
-- 53% des utilisateurs mobiles quittent un site qui met plus de **3 secondes** a charger.
-
-### 2.3 Les différents niveaux de cache
-
-Le caching n'existe pas qu'à un seul endroit. Il y a toute une hiérarchie :
+Le cache n'existe pas à un seul endroit. C'est une **chaîne**, ordonnée du plus proche de l'utilisateur (le plus rapide) au plus proche de la donnée (le plus lent). Une requête traverse ces couches et s'arrête à la première qui détient une copie fraîche.
 
 ```
 UTILISATEUR
     |
     v
-+-------------------+
-| Cache navigateur  |  <-- Le plus proche de l'utilisateur
-| (memoire/disque)  |      Temps d'acces : ~1ms
-+-------------------+
-    |
+[1] Cache navigateur        ~1 ms    mémoire / disque, privé à un user
+    |                                  (module 07)
     v
-+-------------------+
-| Cache proxy local |  <-- Proxy d'entreprise, cache du FAI
-| (ex: Squid)       |      Temps d'acces : ~10ms
-+-------------------+
-    |
+[2] CDN                     ~30 ms   réseau mondial, cache partagé en bordure
+    |                                  (module 08)
     v
-+-------------------+
-| CDN               |  <-- Reseau mondial de serveurs
-| (ex: Cloudflare)  |      Temps d'acces : ~30ms
-+-------------------+
-    |
+[3] Reverse proxy / cache   ~50 ms   Varnish, nginx, Redis en frontal
+    |   serveur partagé                (modules 08-09)
     v
-+-------------------+
-| Cache serveur     |  <-- Redis, Memcached, Varnish
-| (reverse proxy)   |      Temps d'acces : ~50ms
-+-------------------+
-    |
+[4] Cache applicatif        ~5 ms    mémoïsation, cache in-process de l'API
+    |                                  (module 09)
     v
-+-------------------+
-| Serveur d'origine |  <-- Le "vrai" serveur
-| (ex: Node.js)     |      Temps d'acces : ~100-500ms
-+-------------------+
-    |
-    v
-+-------------------+
-| Base de donnees   |  <-- Source de verite
-+-------------------+
+[5] Base de données         variable source de vérité (module 09)
 ```
 
-**Analogie du restaurant** : Le cache navigateur, c'est comme avoir les ingredients déjà sur ton plan de travail. Le CDN, c'est comme un entrepot regional. Le serveur d'origine, c'est l'usine de production. Plus c'est proche de toi, plus c'est rapide.
+Deux points de vocabulaire structurants :
 
----
+- **Cache privé vs partagé.** Le cache navigateur [1] est *privé* : réservé à un seul utilisateur, il peut donc stocker des données personnelles. Le CDN et le reverse proxy [2][3] sont *partagés* : une réponse mise en cache est servie à tous — d'où l'interdiction d'y stocker du contenu personnalisé sans précaution (en-tête `private`, vu au module 04).
+- **Plus une couche est proche de l'utilisateur, plus le gain est grand mais plus le risque d'obsolescence est élevé.** Tout le cours consiste à trouver l'équilibre : cacher longtemps *sans* servir de données périmées.
 
-## 3. Modèle mental : le trajet d'une requête
+### 2.5 Le vocabulaire de base du cache
 
-### 3.1 Le voyage complet d'une requête HTTP
+| Terme | Signification |
+|---|---|
+| **Cache hit** | La copie demandée est trouvée dans le cache → réponse immédiate, pas d'aller à l'origine |
+| **Cache miss** | La copie n'est pas là → il faut interroger la couche suivante |
+| **Fresh (frais)** | La copie est encore dans sa durée de validité → servie directement |
+| **Stale (périmé)** | La copie a dépassé sa validité → elle existe encore mais doit être revalidée |
+| **Revalidation** | Demander à l'origine « ma copie périmée est-elle toujours bonne ? » → réponse `304` (oui) ou `200` (voici la neuve) |
+| **TTL** | *Time To Live* — durée pendant laquelle une copie reste fraîche |
+| **Origin server** | Le serveur d'origine, source de vérité de la ressource |
+| **Invalidation** | Forcer l'expiration / suppression d'une entrée de cache |
 
-Quand tu tapes `https://www.example.com/page.html` dans ton navigateur, voici ce qui se passe :
+### 2.6 La carte du cours
 
-```
-ETAPE 1 : Resolution DNS
-=========================
-Navigateur: "Quelle est l'adresse IP de www.example.com ?"
-
-  Navigateur --> Cache DNS local
-                   |
-                   +--> Pas en cache ? --> Serveur DNS du FAI
-                                              |
-                                              +--> Pas la ? --> Serveur DNS racine
-                                                                    |
-                                                                    v
-                                                   Reponse: 93.184.216.34
-
-
-ETAPE 2 : Connexion TCP
-========================
-Navigateur --> SYN --> Serveur (93.184.216.34:443)
-Navigateur <-- SYN-ACK <-- Serveur
-Navigateur --> ACK --> Serveur
-(3-way handshake : comme se serrer la main avant de parler)
-
-
-ETAPE 3 : Handshake TLS (pour HTTPS)
-=====================================
-Navigateur <--> Serveur : Echange de certificats et cles
-(Comme verifier la carte d'identite avant d'echanger des secrets)
-
-
-ETAPE 4 : Envoi de la requete HTTP
-====================================
-GET /page.html HTTP/1.1
-Host: www.example.com
-Accept: text/html
-Accept-Encoding: gzip, deflate, br
-If-None-Match: "abc123"        <-- "J'ai deja la version abc123"
-
-
-ETAPE 5 : Traitement cote serveur
-===================================
-Serveur: "Hmm, la version abc123 est toujours valide"
-         OU
-         "La page a change, voici la nouvelle version"
-
-
-ETAPE 6 : Reponse HTTP
-========================
-HTTP/1.1 304 Not Modified       <-- "Ta copie est encore bonne"
-ETag: "abc123"
-Cache-Control: max-age=3600
-
-OU
-
-HTTP/1.1 200 OK                 <-- "Voici la nouvelle version"
-ETag: "def456"
-Cache-Control: max-age=3600
-Content-Type: text/html
-Content-Length: 4521
-
-<!DOCTYPE html>...
-
-
-ETAPE 7 : Le navigateur affiche la page
-=========================================
-Et stocke la reponse dans son cache pour la prochaine fois !
-```
-
-### 3.2 Ou le cache intervient
-
-A chaque étape, le cache peut court-circuiter le processus :
+Chaque module ajoute une pièce à la chaîne ci-dessus. Voici l'itinéraire, du fondamental à l'avancé :
 
 ```
-Tu tapes l'URL
-     |
-     v
-[Cache navigateur a une copie fraiche ?]
-     |                    |
-    OUI                  NON
-     |                    |
-     v                    v
-  Afficher          [Envoyer la requete au serveur]
-  directement            |
-  (0 requete             v
-   reseau !)       [Serveur : la ressource a change ?]
-                         |                    |
-                        NON                  OUI
-                         |                    |
-                         v                    v
-                   304 Not Modified     200 OK + nouveau contenu
-                   (petite reponse)     (grosse reponse)
-                         |                    |
-                         v                    v
-                   Utiliser la           Stocker en cache
-                   copie locale          + afficher
+00  Vue d'ensemble           <- tu es ici : le modèle + la chaîne de cache
+01  Protocole HTTP           méthodes, status codes, connexions
+02  HTTP/2 & HTTP/3          multiplexage, coût réduit des requêtes
+03  En-têtes HTTP            le langage du cache (Vary, Content-*, ...)
+04  Cache-Control            l'en-tête maître : max-age, private, no-store
+05  ETag & validation        revalidation conditionnelle 304
+06  Stale-While-Revalidate   servir périmé + rafraîchir en arrière-plan
+07  Cache navigateur         couche [1] : mémoire, disque, Service Worker
+08  CDN                      couche [2] : cache partagé mondial
+09  Cache multi-couches      orchestrer [1]->[5] de façon cohérente
+    ... puis SSR/ISR/edge, streaming, mesure de perf, PWA & push
 ```
 
----
+Retiens la logique : on descend d'abord le protocole (00-02), puis on apprend le *langage du cache* (03-06), puis on l'applique couche par couche (07-09), puis on monte vers le rendu et la perf globale.
 
-## 4. Glossaire des termes clés
+### 2.7 Les outils d'observation
 
-### 4.1 Termes fondamentaux
+Deux outils suffisent pour tout ce cours ; on les réutilise à chaque module.
 
-| Terme              | Definition                                                    | Analogie                              |
-|--------------------|---------------------------------------------------------------|---------------------------------------|
-| **Client**         | Le logiciel qui envoie la requête (navigateur, curl, etc.)    | Le client au restaurant               |
-| **Serveur**        | Le logiciel qui recoit la requête et envoie la réponse        | Le chef cuisinier                     |
-| **Requête**        | Le message envoye du client au serveur                        | La commande au restaurant             |
-| **Reponse**        | Le message renvoye du serveur au client                       | Le plat servi                         |
-| **URL**            | Uniform Resource Locator - l'adresse de la ressource          | L'adresse postale                     |
-| **Header**         | Metadonnees accompagnant la requête ou la réponse             | Les notes sur l'enveloppe             |
-| **Body**           | Le contenu principal du message                               | Le contenu de la lettre               |
-| **Status code**    | Code numérique indiquant le résultat (200, 404, 500...)       | Le tampon "recu" ou "refuse"          |
+**Chrome DevTools — onglet Network.** `F12` → Network. Les colonnes `Status` (200 vs 304), `Size` (`from disk cache` / `from memory cache` vs octets réels) et `Time` (`0 ms` = cache hit) racontent le comportement du cache d'un coup d'œil. La case *Disable cache* force le rechargement complet pour comparer.
 
-### 4.2 Termes lies au cache
-
-| Terme                    | Definition                                                          |
-|--------------------------|---------------------------------------------------------------------|
-| **Cache hit**            | La ressource demandee est trouvee dans le cache                     |
-| **Cache miss**           | La ressource n'est pas dans le cache, il faut interroger le serveur |
-| **Fresh**                | La copie en cache est encore valide (non expiree)                   |
-| **Stale**                | La copie en cache a expire mais existe encore                       |
-| **Revalidation**         | Vérifier aupres du serveur si la copie stale est encore bonne       |
-| **ETag**                 | Identifiant unique d'une version de ressource (empreinte digitale)  |
-| **Cache-Control**        | Header principal pour controler le comportement du cache            |
-| **CDN**                  | Content Delivery Network - réseau de serveurs de cache distribues   |
-| **TTL**                  | Time To Live - duree de vie d'une entree en cache                   |
-| **Origin server**        | Le serveur d'origine, source de verite de la ressource              |
-| **Reverse proxy**        | Serveur intermédiaire entre le client et le serveur d'origine       |
-| **Invalidation**         | Supprimer ou marquer comme expire une entree du cache               |
-
-### 4.3 Termes réseau
-
-| Terme              | Definition                                                    |
-|--------------------|---------------------------------------------------------------|
-| **DNS**            | Domain Name System - traduit les noms de domaine en IP        |
-| **TCP**            | Transmission Control Protocol - transport fiable              |
-| **TLS/SSL**        | Chiffrement des communications (le "S" de HTTPS)              |
-| **RTT**            | Round-Trip Time - temps aller-retour d'un paquet              |
-| **Latence**        | Temps entre l'envoi d'une requête et la reception de la réponse |
-| **Bande passante** | Debit maximal de donnees par seconde                          |
-
----
-
-## 5. Les outils
-
-### 5.1 Chrome DevTools — Onglet Network
-
-C'est ton outil numéro 1 pour observer le cache HTTP en action.
-
-**Comment l'ouvrir :**
-
-1. Ouvre Chrome
-2. Appuie sur `F12` ou `Ctrl+Shift+I` (Windows) / `Cmd+Option+I` (Mac)
-3. Clique sur l'onglet **Network**
-
-**Ce que tu peux observer :**
-
-```
-+------------------------------------------------------------------+
-| Network                                                          |
-+------------------------------------------------------------------+
-| Name         | Status | Type     | Size       | Time    | Cache  |
-+------------------------------------------------------------------+
-| page.html    | 200    | document | 4.5 KB     | 230ms   |        |
-| style.css    | 304    | style    | (cached)   | 45ms    | memory |
-| logo.png     | 200    | image    | (cached)   | 0ms     | disk   |
-| app.js       | 200    | script   | 125 KB     | 180ms   |        |
-| api/data     | 200    | xhr      | 2.3 KB     | 340ms   |        |
-+------------------------------------------------------------------+
-```
-
-**Colonnes importantes :**
-
-- **Status** : `200` = réponse normale, `304` = pas modifie (cache valide)
-- **Size** : `(from memory cache)` ou `(from disk cache)` = servi depuis le cache
-- **Time** : `0ms` indique un cache hit parfait
-
-**Astuce** : Coche "Disable cache" en haut pour forcer le rechargement complet.
-
-### 5.2 curl — L'outil en ligne de commande
-
-`curl` est un outil en ligne de commande pour envoyer des requêtes HTTP. Il est parfait pour voir les headers bruts.
+**curl — les en-têtes bruts en ligne de commande.**
 
 ```bash
-# Requete GET simple avec les headers de reponse
-curl -v https://www.example.com
+# -I : voir uniquement les en-têtes de réponse
+curl -I https://api.tribuzen.app/api/families
 
-# Afficher UNIQUEMENT les headers de reponse
-curl -I https://www.example.com
+# Requête conditionnelle : "j'ai déjà la version v3-families"
+curl -H 'If-None-Match: "v3-families"' -I https://api.tribuzen.app/api/families
+# -> HTTP/2 304 Not Modified  si la copie est toujours bonne
 
-# Exemple de sortie :
-# HTTP/2 200
-# content-type: text/html; charset=UTF-8
-# cache-control: max-age=604800        <-- Cache pendant 7 jours
-# etag: "3147526947+gzip"              <-- Empreinte de la ressource
-# expires: Thu, 14 Mar 2026 12:00:00 GMT
-# last-modified: Thu, 17 Oct 2019 07:18:26 GMT
-
-# Envoyer une requete conditionnelle (If-None-Match)
-curl -H "If-None-Match: \"3147526947+gzip\"" -I https://www.example.com
-# Reponse attendue : HTTP/2 304 (Not Modified)
-
-# Voir le temps de chaque phase
-curl -w "\nDNS: %{time_namelookup}s\nConnect: %{time_connect}s\nTLS: %{time_appconnect}s\nTotal: %{time_total}s\n" -o /dev/null -s https://www.example.com
+# Mesurer chaque phase du trajet (DNS, connexion, TLS, total)
+curl -w 'DNS:%{time_namelookup} TLS:%{time_appconnect} Total:%{time_total}\n' \
+     -o /dev/null -s https://api.tribuzen.app/api/families
 ```
 
-### 5.3 Node.js — Pour créer nos propres serveurs
+Aucun code applicatif n'est nécessaire ici : ce module observe, les suivants construisent.
 
-Tout au long de ce cours, nous utiliserons Node.js pour créer des serveurs HTTP et experimenter avec le cache.
+---
 
-```typescript
-// server-basic.ts
-// Un serveur HTTP minimal en Node.js
+## 3. Worked examples
 
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+### Exemple 1 — Lire une réponse et décider si elle sera cachée
 
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  // req = la requete recue (ce que le client envoie)
-  // res = la reponse a envoyer (ce que le serveur repond)
+On reçoit cette réponse de l'API TribuZen. Question : sera-t-elle mise en cache, et pour combien de temps ?
 
-  console.log(`${req.method} ${req.url}`);  // Affiche la methode et l'URL
+```
+HTTP/1.1 200 OK
+Content-Type: application/json
+Cache-Control: max-age=60
+ETag: "v3-families"
+Content-Length: 18432
 
-  // Definir les headers de reponse
-  res.writeHead(200, {
-    'Content-Type': 'text/html',          // Le contenu est du HTML
-    'Cache-Control': 'max-age=60',        // Cacher pendant 60 secondes
-  });
-
-  // Envoyer le body
-  res.end('<h1>Bonjour, HTTP !</h1>');
-});
-
-// Demarrer le serveur sur le port 3000
-server.listen(3000, () => {
-  console.log('Serveur demarre sur http://localhost:3000');
-});
+[ { "id": 1, "name": "Martin" }, ... ]
 ```
 
-**Pour lancer le serveur :**
+Raisonnement, ligne par ligne :
 
-```bash
-node server-basic.js
-# Serveur demarre sur http://localhost:3000
+1. **Status `200 OK`** → réponse complète et valide : elle *peut* être mise en cache (contrairement à une erreur `500`).
+2. **`Cache-Control: max-age=60`** → le serveur autorise le stockage pendant **60 secondes**. Pendant ce laps, toute nouvelle requête identique est un **cache hit** : réponse immédiate, `0 ms`, aucun aller à l'origine.
+3. **Après 60 s** → la copie devient **stale**. Le navigateur ne la jette pas : il déclenche une **revalidation** en envoyant `If-None-Match: "v3-families"`.
+4. **L'`ETag`** sert d'empreinte pour cette revalidation. Si la liste n'a pas changé, l'origine répond `304 Not Modified` (quelques octets, pas les 18 kB). Sinon, `200 OK` avec un nouvel `ETag`.
 
-# Dans un autre terminal :
-curl -v http://localhost:3000
+Conclusion : cette réponse revient de la BDD **au maximum une fois toutes les 60 s**, quel que soit le nombre de lecteurs. C'est exactement le traitement qui manquait à `families` dans le cas concret.
+
+### Exemple 2 — Suivre une requête à travers les couches
+
+Un utilisateur ouvre le tableau de bord. Voici le trajet du `GET /api/families` selon l'état des caches, avec le temps observé :
+
+```
+Scénario A — tout froid (premier chargement de la journée)
+  navigateur [miss] -> CDN [miss] -> reverse proxy [miss] -> API -> BDD
+  Résultat : 200 OK, ~870 ms. Chaque couche stocke la réponse au passage.
+
+Scénario B — 10 s plus tard, même utilisateur
+  navigateur [HIT fresh]
+  Résultat : 0 ms, aucune requête réseau. La copie navigateur est encore fraîche.
+
+Scénario C — un AUTRE utilisateur, 10 s plus tard
+  navigateur [miss] -> CDN [HIT fresh]
+  Résultat : ~30 ms. Le CDN (cache partagé) sert la copie déjà stockée en A.
+  L'API et la BDD ne sont PAS sollicitées.
 ```
 
-### 5.4 Vérification de l'environnement
+Ce que l'exemple démontre :
 
-Avant de continuer, vérifié que tout est installe :
+- Le cache **privé** (B) élimine totalement le réseau pour le même utilisateur.
+- Le cache **partagé** (C) fait bénéficier *tous* les utilisateurs du travail fait une seule fois.
+- La charge BDD s'effondre : sur des centaines d'ouvertures en une minute, l'origine ne voit qu'**une** requête. C'est le mécanisme qui règle le pic du soir décrit au §1.
 
-```bash
-# Verifier Node.js (version 18+ recommandee)
-node --version
-# v20.11.0
+---
 
-# Verifier npm
-npm --version
-# 10.2.4
+## 4. Pièges & misconceptions
 
-# Verifier curl
-curl --version
-# curl 8.4.0 ...
+### PIÈGE #1 — « Le cache, c'est uniquement le navigateur »
 
-# Verifier Chrome
-# Ouvre Chrome et tape chrome://version dans la barre d'adresse
+**Faux.** Le cache navigateur n'est que la couche [1]. Le plus gros gain de scalabilité vient des caches **partagés** (CDN, reverse proxy) qui protègent l'origine pour *tous* les utilisateurs à la fois. Un débutant qui ne pense qu'au cache navigateur laisse son API encaisser chaque visiteur. Le cours consacre les modules 08-09 aux couches partagées précisément pour cette raison.
+
+### PIÈGE #2 — Confondre « cache hit » et « status 200 »
+
+Un `200 OK` peut être servi **depuis le cache** *ou* fraîchement téléchargé — le status seul ne le dit pas. Il faut lire la colonne `Size` : `(from disk cache)` / `(from memory cache)` = hit ; une taille en octets = téléchargement réel. Le `304 Not Modified`, lui, signale une **revalidation réussie** (la copie locale est réutilisée), pas un hit direct. Trois situations distinctes qu'on confond souvent :
+
+```
+200 + Size en octets        -> téléchargé depuis l'origine (miss)
+200 + (from ... cache)      -> servi localement, PAS de réseau (hit frais)
+304 Not Modified            -> revalidé : petit aller-retour, corps réutilisé
+```
+
+### PIÈGE #3 — « Fresh/stale » = « bon/mauvais »
+
+**Faux.** Une copie **stale** n'est pas fausse ni inutilisable : elle a seulement dépassé son TTL. Selon la stratégie (notamment *stale-while-revalidate*, module 06), on peut **servir la copie stale immédiatement** tout en la rafraîchissant en arrière-plan. Assimiler stale à « à jeter » fait rater l'une des stratégies de perf les plus puissantes.
+
+### PIÈGE #4 — Cacher du contenu personnalisé dans un cache partagé
+
+Mettre une réponse personnalisée (données d'un utilisateur donné) dans un cache **partagé** (CDN, proxy) la ferait servir à *d'autres* utilisateurs → fuite de données. La règle : contenu personnalisé → cache **privé** uniquement (`Cache-Control: private`), jamais partagé. Ce point, esquissé ici, est détaillé au module 04 ; le retenir dès maintenant évite l'erreur de sécurité classique du caching.
+
+### PIÈGE #5 — « HTTP est obsolète, tout passe en temps réel / WebSocket »
+
+**Faux.** L'écrasante majorité du trafic web reste du requête-réponse HTTP, et HTTP/2 puis HTTP/3 (module 02) l'ont modernisé, pas remplacé. Le temps réel (WebSocket, SSE) répond à un besoin *différent* et complémentaire. Maîtriser HTTP et son cache reste le socle de toute perf web.
+
+---
+
+## 5. Ancrage TribuZen
+
+TribuZen se compose de trois clients d'une même API : l'**admin web** (React), l'**app mobile** et l'**API** elle-même. Les trois partagent la même chaîne de cache — c'est le terrain d'entraînement de tout le cours.
+
+- **Couche [1] navigateur (admin web)** : les assets statiques (`app.css`, avatars, icônes) doivent être servis `from cache` en `0 ms`. C'est le cas de `avatar-42.png` / `app.css` au §1.
+- **Couche [2] CDN** : l'app mobile et l'admin tapent une API géo-distribuée. La liste des familles, quasi statique, se cache en bordure pour couper la latence transcontinentale.
+- **Couches [3]-[4] reverse proxy / applicatif** : devant l'API, un cache partagé absorbe le pic du soir sur `GET /api/families` pour que la couche [5] BDD ne voie qu'une requête par intervalle de TTL.
+- **Couche [5] BDD** : source de vérité, sollicitée le moins possible. Tout l'objectif du cours est de réduire le nombre de requêtes qui l'atteignent.
+
+Le fil rouge des modules suivants : reprendre chaque endpoint de l'API TribuZen et lui appliquer la bonne stratégie de cache à la bonne couche, pour faire tomber à la fois la latence perçue et la facture cloud.
+
+Endpoint témoin suivi tout au long du cours :
+```
+GET /api/families   -> aujourd'hui : 870 ms, 1 requête BDD par ouverture
+                    -> objectif fin de cours : ~30 ms (CDN), 1 requête BDD / minute
 ```
 
 ---
 
-## 6. Premiere observation : le cache en action
+## 6. Points clés
 
-### 6.1 Créer un serveur d'observation
+1. HTTP est un protocole **client-serveur requête-réponse**, sans état, textuel, piloté par ses **en-têtes** — c'est le socle de tout le web.
+2. Le **caching est le levier de perf n°1** : il attaque simultanément la latence (100-1000× plus rapide), le coût serveur et la scalabilité.
+3. Un cache hit en RAM (~1 ms) est incomparablement plus rapide qu'un aller à l'origine (~100-300 ms) : « ne pas faire la requête » bat toute optimisation de code.
+4. Le cache est une **chaîne de couches** : navigateur → CDN → reverse proxy → applicatif → BDD, du plus rapide/proche au plus lent/source de vérité.
+5. Cache **privé** (navigateur, un seul user) vs **partagé** (CDN/proxy, tous les users) : ne jamais mettre de contenu personnalisé dans un cache partagé.
+6. Vocabulaire socle : **hit/miss**, **fresh/stale**, **revalidation** (`304`), **TTL**, **invalidation**.
+7. On observe tout ça avec **DevTools > Network** (`Status`, `Size`, `Time`) et **curl -I** — aucun code requis pour comprendre le comportement du cache.
 
-Cree ce fichier et lance-le :
+---
 
-```typescript
-// observe-cache.ts
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-
-let requestCount: number = 0;  // Compteur de requetes
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  requestCount++;
-  const now: string = new Date().toISOString();
-
-  console.log(`[${now}] Requete #${requestCount}: ${req.method} ${req.url}`);
-
-  // Afficher les headers importants de la requete
-  console.log('  Headers de cache recus:');
-  console.log(`    If-None-Match: ${req.headers['if-none-match'] || '(absent)'}`);
-  console.log(`    If-Modified-Since: ${req.headers['if-modified-since'] || '(absent)'}`);
-  console.log(`    Cache-Control: ${req.headers['cache-control'] || '(absent)'}`);
-  console.log('');
-
-  // Repondre avec des headers de cache
-  res.writeHead(200, {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Cache-Control': 'max-age=10',      // Cacher pendant 10 secondes
-    'ETag': '"version-1"',              // Identifiant de version
-    'X-Request-Count': requestCount.toString(),
-  });
-
-  res.end(`
-    <!DOCTYPE html>
-    <html>
-    <body>
-      <h1>Observation du cache</h1>
-      <p>Requete numero: ${requestCount}</p>
-      <p>Heure serveur: ${now}</p>
-      <p>Recharge cette page et observe !</p>
-      <p><strong>Astuce :</strong> Ouvre DevTools (F12) > Network</p>
-    </body>
-    </html>
-  `);
-});
-
-server.listen(3000, () => {
-  console.log('=== Serveur d\'observation du cache ===');
-  console.log('URL: http://localhost:3000');
-  console.log('');
-  console.log('Instructions :');
-  console.log('1. Ouvre http://localhost:3000 dans Chrome');
-  console.log('2. Ouvre DevTools (F12) > Onglet Network');
-  console.log('3. Recharge la page (F5) plusieurs fois');
-  console.log('4. Observe les requetes dans la console ET dans DevTools');
-  console.log('5. Attends 10 secondes et recharge a nouveau');
-  console.log('');
-});
-```
-
-### 6.2 Exercice guide
-
-1. Lance le serveur : `node observe-cache.js`
-2. Ouvre `http://localhost:3000` dans Chrome
-3. Ouvre DevTools (F12) > Network
-4. Recharge la page (F5) — observe :
-   - Le numéro de requête augmente-t-il dans la console du serveur ?
-   - Que dit la colonne "Size" dans DevTools ?
-5. Attends 10 secondes et recharge
-6. Force un rechargement complet avec `Ctrl+Shift+R`
-
-**Ce que tu devrais observer :**
+## 7. Seeds Anki
 
 ```
-Premier chargement :
-  Console serveur : Requete #1
-  DevTools : Status 200, Size: xxx bytes
-
-Rechargement dans les 10 secondes :
-  Console serveur : (rien ! le cache repond directement)
-  DevTools : Status 200, Size: (from disk cache)
-
-Apres 10 secondes :
-  Console serveur : Requete #2
-  DevTools : Status 200 ou 304
-
-Ctrl+Shift+R (force reload) :
-  Console serveur : Requete #3
-  DevTools : Status 200 (force un telechargement complet)
+Quelles sont les 3 propriétés fondamentales de HTTP ?|Sans état (stateless), basé sur du texte, extensible via les en-têtes. Le stateless est précisément ce qui rend le caching sûr.
+Pourquoi le caching est-il le levier de performance n°1 ?|Il élimine des allers-retours réseau (un hit RAM ~1 ms vs origine ~100-300 ms, soit 100-1000× plus rapide), réduit le coût serveur (moins de CPU/BDD) et absorbe les pics de charge (scalabilité).
+Cite les couches de cache dans l'ordre, de l'utilisateur à la source de vérité.|Cache navigateur -> CDN -> reverse proxy/cache serveur partagé -> cache applicatif -> base de données.
+Quelle est la différence entre un cache privé et un cache partagé ?|Privé (navigateur) = réservé à un seul utilisateur, peut stocker des données personnelles. Partagé (CDN, reverse proxy) = servi à tous, donc jamais de contenu personnalisé sans en-tête private.
+Différence entre cache hit et cache miss ?|Hit = la copie demandée est trouvée dans le cache, réponse immédiate sans aller à l'origine. Miss = absente, il faut interroger la couche suivante.
+Que signifient "fresh" et "stale" pour une entrée de cache ?|Fresh = encore dans sa durée de validité (TTL), servie directement. Stale = TTL dépassé ; la copie existe encore mais doit être revalidée (elle n'est pas forcément fausse).
+Qu'est-ce qu'une revalidation et quel status l'accompagne ?|Demander à l'origine si une copie stale est toujours bonne. Réponse 304 Not Modified (copie réutilisée, corps non renvoyé) ou 200 OK (nouvelle version).
+Dans DevTools > Network, comment distingue-t-on un cache hit d'un téléchargement ?|Colonne Size : "(from disk/memory cache)" et Time ~0 ms = hit ; une taille en octets = téléchargé depuis l'origine. Le 304 = revalidation réussie, pas un hit direct.
 ```
 
 ---
 
-## Points clés
+## Pont vers le lab
 
-1. **HTTP est un protocole requête-réponse** : le client demandé, le serveur repond.
-2. **Le caching evite des allers-retours couteux** : la latence réseau est l'ennemi principal de la performance web.
-3. **Il existe plusieurs niveaux de cache** : navigateur, proxy, CDN, serveur — chacun avec ses avantages.
-4. **Le cache peut repondre à la place du serveur** : si la copie est "fraiche", le serveur n'est même pas contacte.
-5. **Les outils (DevTools, curl) sont indispensables** pour observer et comprendre le cache en action.
-
----
-
-## Lab associe
-
--> `labs/00-observer-le-cache.md` — Observer le cache avec Chrome DevTools et curl
-
----
-
-## Pour aller plus loin
-
-- [MDN — HTTP Overview](https://developer.mozilla.org/fr/docs/Web/HTTP/Overview)
-- [MDN — HTTP Caching](https://developer.mozilla.org/fr/docs/Web/HTTP/Caching)
-- [web.dev — HTTP Cache](https://web.dev/articles/http-cache)
-- [High Performance Browser Networking — Ilya Grigorik](https://hpbn.co/)
-
----
-
-## Si tu es perdu
-
-**Retiens juste ceci :**
-
-HTTP, c'est comme le courrier postal. Tu envoies une lettre (requête) à une adresse (URL), et tu recois une réponse. Le cache, c'est comme garder une photocopie de la réponse dans un tiroir. La prochaine fois que tu as besoin de la même info, tu regardes dans le tiroir au lieu de re-envoyer une lettre. C'est beaucoup plus rapide.
-
-Tout le reste du cours va detailler **comment** le navigateur decide quoi mettre dans le tiroir, combien de temps le garder, et quand vérifier si la photocopie est encore a jour.
-
----
-
-## Exercice pratique — Chrome DevTools
-
-### Objectif
-
-Ouvrir Chrome DevTools, effectuer une requête vers un site réel, et identifier les headers de cache dans la réponse.
-
-### Etapes
-
-1. **Ouvrir Chrome DevTools**
-   - Ouvre Google Chrome
-   - Appuie sur `F12` ou `Ctrl+Shift+I` (Windows/Linux) / `Cmd+Option+I` (Mac)
-   - Clique sur l'onglet **Network**
-
-2. **Preparer l'observation**
-   - Coche la case **Preserve log** (pour garder les requêtes même après une navigation)
-   - Assure-toi que le filtre est sur **All** (pas uniquement JS ou CSS)
-   - Verifie que la case **Disable cache** est **decochee** (on veut observer le cache normal)
-
-3. **Effectuer une première requête**
-   - Dans la barre d'adresse de Chrome, va sur `https://www.example.com`
-   - Observe la liste de requêtes qui apparait dans l'onglet Network
-   - Clique sur la première requête (`www.example.com`)
-
-4. **Inspecter les headers de réponse**
-   - Dans le panneau de droite, clique sur l'onglet **Headers**
-   - Sous **Response Headers**, cherche les headers suivants :
-     - `Cache-Control` — indique la politique de cache (ex: `max-age=604800`)
-     - `ETag` — empreinte de la ressource (ex: `"3147526947+gzip"`)
-     - `Expires` — date d'expiration absolue
-     - `Last-Modified` — date de dernière modification
-   - Note les valeurs que tu trouves
-
-5. **Observer l'effet du cache au rechargement**
-   - Appuie sur `F5` pour recharger la page
-   - Observe la colonne **Size** dans la liste des requêtes :
-     - Si tu vois `(from disk cache)` ou `(from memory cache)`, la ressource a ete servie depuis le cache du navigateur
-     - Si tu vois une taille en octets (ex: `1.2 kB`), la ressource a ete telechargee depuis le réseau
-   - Observe la colonne **Time** : les ressources en cache affichent un temps proche de `0 ms`
-
-6. **Comparer avec un hard refresh**
-   - Appuie sur `Ctrl+Shift+R` (Windows/Linux) ou `Cmd+Shift+R` (Mac) pour forcer un rechargement complet
-   - Observe que toutes les ressources sont maintenant telechargees depuis le réseau (pas de `(from cache)`)
-   - Compare les temps de chargement avec le rechargement normal
-
-### Ce que tu devrais observer
-
-```
-Rechargement normal (F5) :
-  Size: (from disk cache)     Time: 0 ms     --> Cache HIT
-  Size: (from memory cache)   Time: 0 ms     --> Cache HIT (RAM)
-
-Hard refresh (Ctrl+Shift+R) :
-  Size: 1.2 kB                Time: 120 ms   --> Telechargement complet
-```
-
-### Questions de reflexion
-
-- Quels headers lies au cache as-tu trouves dans la réponse de `example.com` ?
-- Quelle est la différence de temps de chargement entre un rechargement normal et un hard refresh ?
-- Pourquoi certaines ressources apparaissent en `(from memory cache)` et d'autres en `(from disk cache)` ?
-
----
-
-## Defi
-
-### Observe et analyse une requête réelle
-
-**Objectif** : Observer une requête HTTP complete dans Chrome DevTools et identifier les headers de cache.
-
-**Etapes :**
-
-1. Ouvre Chrome et va sur `https://www.wikipedia.org`
-2. Ouvre DevTools (F12) > Network
-3. Recharge la page (F5)
-4. Clique sur la première requête (`www.wikipedia.org`)
-5. Dans l'onglet "Headers", reponds a ces questions :
-
-**Questions :**
-
-- Quel est le status code de la réponse ?
-- Quels headers lies au cache peux-tu trouver ? (`Cache-Control`, `ETag`, `Expires`, `Last-Modified`)
-- Y a-t-il un header `Vary` ? Si oui, quelle est sa valeur ?
-- Quelle est la taille de la réponse ?
-- Recharge la page une deuxieme fois : le status code a-t-il change ?
-
-<details>
-<summary>Reponse attendue</summary>
-
-Tu devrais observer quelque chose comme :
-
-- **Status** : `200 OK` au premier chargement, potentiellement `304 Not Modified` ou `(from cache)` ensuite
-- **Cache-Control** : Probablement `private, s-maxage=0, max-age=0, must-revalidate` (Wikipedia est dynamique)
-- **ETag** : Present, quelque chose comme `W/"..."` (weak ETag)
-- **Last-Modified** : Une date de dernière modification
-- **Vary** : Probablement `Accept-Encoding, Cookie` (la réponse depend de l'encodage et des cookies)
-- Au deuxieme chargement, certaines ressources statiques (images, CSS, JS) seront servies depuis le cache
-
-L'important est de **voir** ces headers, pas de les comprendre a 100% pour l'instant. On les etudiera en detail dans les modules suivants.
-
-</details>
-
----
-
-<!-- parcours-recommande -->
-
-::: tip Parcours recommandé
-1. **Screencast** : [screencast 00 prérequis](../screencasts/screencast-00-prerequis.md)
-2. **Visualisation** : [HTTP Lifecycle](../visualizations/http-lifecycle.html)
-3. **Quiz** : [quiz 00 prérequis](../quizzes/quiz-00-prerequis.html)
-:::
+> Lab associé : [`../labs/lab-00-prerequis-et-vue-ensemble/README.md`](../labs/lab-00-prerequis-et-vue-ensemble/README.md). Tu observes le comportement du cache sur de vraies ressources avec `curl -I` et DevTools > Network, puis tu déclenches toi-même un `304` de revalidation sur un mini-serveur Node — sans écrire une ligne de logique de cache. Pratique guidée + corrigé complet.

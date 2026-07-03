@@ -1,1257 +1,440 @@
-# Module 05 — ETag & Validation conditionnelle
+---
+titre: ETag et validation conditionnelle
+cours: 11-http-caching
+notions: [revalidation d'une ressource stale, ETag fort vs faible, préfixe W/ (weak), génération d'ETag par hash de contenu vs version applicative, Last-Modified, If-Modified-Since, If-None-Match, weak comparison algorithm, flux 304 Not Modified, précédence de If-None-Match sur If-Modified-Since, combinaison Cache-Control plus ETag]
+outcomes:
+  - sait émettre un ETag (fort ou faible) et répondre 304 Not Modified sur une revalidation If-None-Match
+  - sait choisir entre ETag fort et ETag faible et générer chacun (hash de contenu ou version applicative)
+  - sait poser Last-Modified / If-Modified-Since en fallback et connaît sa précédence face à If-None-Match
+  - sait combiner Cache-Control (fraîcheur) et ETag (revalidation) sur un même endpoint
+prerequis: [modules 00-04 du cours 11-http-caching (surtout 04-cache-control)]
+next: 06-stale-while-revalidate
+libs: []
+tribuzen: ETag et 304 sur les réponses API TribuZen — revalidation de la liste des membres d'une famille quand elle n'a pas changé
+last-reviewed: 2026-07
+---
 
-> **Objectif** : Comprendre les mécanismes de validation conditionnelle (ETag, Last-Modified), savoir implementer la revalidation dans un serveur Node.js, et maîtriser le flow complet requête -> 304 -> cache.
-> **Difficulte** : ⭐⭐ (Intermédiaire)
+# ETag et validation conditionnelle
+
+> **Outcomes — tu sauras FAIRE :** émettre un ETag et répondre `304 Not Modified` sur une revalidation `If-None-Match`, choisir et générer un ETag fort ou faible, poser `Last-Modified`/`If-Modified-Since` en fallback, combiner `Cache-Control` et ETag sur un endpoint.
+> **Difficulté :** :star::star::star:
+>
+> **Portée :** ce module couvre la **validation conditionnelle en lecture** — revalider une copie périmée sans re-télécharger le corps. Il s'appuie sur la **fraîcheur** (`Cache-Control`, `max-age`) vue au **module 04** sans la re-expliquer. Le motif symétrique côté écriture (`If-Match` → `412` pour la concurrence optimiste) sort de ce module. La suite logique (`stale-while-revalidate`, servir du stale pendant qu'on revalide) est le **module 06**.
+
+## 1. Cas concret d'abord
+
+Tu bosses sur l'API TribuZen. L'app mobile affiche la liste des membres d'une famille et la rafraîchit toutes les 30 secondes. Le module 04 (`Cache-Control: max-age=30`) rend la copie **fraîche** pendant 30 s — mais dès qu'elle devient **périmée** (`stale`), le mobile refait un `GET` complet.
+
+Problème : la liste des membres ne change quasiment jamais. Pourtant, chaque rafraîchissement re-télécharge le JSON complet.
+
+```
+Sans validation conditionnelle — la liste est stable mais on la re-télécharge
+=============================================================================
+GET /api/families/42/members        -> 200 OK  (8 Ko)   [00:00]
+... 30 s plus tard, copie stale ...
+GET /api/families/42/members        -> 200 OK  (8 Ko)   [00:30]   rien n'a changé !
+GET /api/families/42/members        -> 200 OK  (8 Ko)   [01:00]   rien n'a changé !
+GET /api/families/42/members        -> 200 OK  (8 Ko)   [01:30]   rien n'a changé !
+
+Transféré : 32 Ko dont 24 Ko strictement inutiles.
+```
+
+Sur un forfait mobile limité et un réseau lent, re-télécharger 8 Ko d'un contenu identique est du gaspillage pur. On voudrait que le serveur puisse répondre « c'est encore bon, garde ta copie » **sans renvoyer les octets**.
+
+Ce module donne l'outil qui règle ça : la **revalidation** (valider la copie stale au lieu de la re-télécharger → `304 Not Modified`). Elle repose sur un **validateur** attaché à la réponse : l'ETag (ou, en fallback, la date `Last-Modified`).
 
 ---
 
-## 1. Pourquoi la validation conditionnelle ?
+## 2. Théorie complète, concise
 
-### 1.1 Le problème : re-telecharger pour rien
+### 2.1 Fresh, stale, revalidation
 
-**Analogie du dictionnaire** : Tu as un dictionnaire de 2000 pages (2 Mo) sur ton bureau. Tous les mois, l'editeur publie une nouvelle edition. La plupart du temps, rien n'a change. Mais sans moyen de vérifier, tu dois racheter le dictionnaire entier chaque mois, "au cas où".
+Rappel du module 04 : une réponse cachée est **fraîche** (`fresh`) tant que son âge est sous `max-age`, puis devient **périmée** (`stale`). Une copie stale n'est pas *fausse* — elle est juste *à vérifier*.
 
-```
-SANS VALIDATION CONDITIONNELLE :
-==================================
+**Revalider**, c'est demander au serveur « ma copie est-elle toujours bonne ? » **sans re-télécharger le corps**. Deux issues :
 
-Requete 1 (premier chargement) :
-  GET /gros-fichier.js HTTP/1.1
-  --> Reponse : 200 OK (1.2 Mo)                 Transfert : 1.2 Mo
+- Rien n'a changé → `304 Not Modified`, sans corps. Le client réutilise sa copie et repart pour un cycle de fraîcheur.
+- Ça a changé → `200 OK` avec le nouveau corps et un nouveau validateur.
 
-Requete 2 (cache expire, meme fichier) :
-  GET /gros-fichier.js HTTP/1.1
-  --> Reponse : 200 OK (1.2 Mo)                 Transfert : 1.2 Mo
-  --> Le fichier n'a PAS change ! 1.2 Mo gaspilles.
+> Point clé à ancrer tout de suite : le `304` **économise le corps (body), pas le round-trip**. Il y a toujours un aller-retour réseau. Ce qu'on économise, c'est le transfert des octets du corps — souvent 95 à 99,99 % de la réponse.
 
-Requete 3 (cache expire a nouveau) :
-  GET /gros-fichier.js HTTP/1.1
-  --> Reponse : 200 OK (1.2 Mo)                 Transfert : 1.2 Mo
-  --> ENCORE 1.2 Mo gaspilles.
+### 2.2 Le validateur ETag
 
-Total transfere : 3.6 Mo (dont 2.4 Mo inutiles)
-
-
-AVEC VALIDATION CONDITIONNELLE :
-==================================
-
-Requete 1 (premier chargement) :
-  GET /gros-fichier.js HTTP/1.1
-  --> Reponse : 200 OK (1.2 Mo)
-      ETag: "abc123"                             Transfert : 1.2 Mo
-
-Requete 2 (cache expire, on VERIFIE d'abord) :
-  GET /gros-fichier.js HTTP/1.1
-  If-None-Match: "abc123"                <-- "J'ai la version abc123"
-  --> Reponse : 304 Not Modified (~200 octets)   Transfert : 0.0002 Mo
-  --> Le fichier n'a pas change, on garde notre copie.
-
-Requete 3 (cache expire a nouveau) :
-  GET /gros-fichier.js HTTP/1.1
-  If-None-Match: "abc123"
-  --> Reponse : 304 Not Modified (~200 octets)   Transfert : 0.0002 Mo
-
-Total transfere : 1.2004 Mo (economie de 2.4 Mo = 66% !)
-```
-
-### 1.2 Le concept de validateur
-
-Un **validateur** est une information qui permet de vérifier si une ressource a change sans telecharger tout son contenu.
-
-Il existe deux types de validateurs :
+Un **ETag** (Entity Tag) est une chaîne opaque qui identifie une version précise d'une ressource. MDN : *« Entity tag that uniquely represents the requested resource. It is a string of ASCII characters placed between double quotes »*. Les **guillemets doubles font partie de la syntaxe**.
 
 ```
-+--------------------------------------------------+
-|              LES DEUX VALIDATEURS HTTP            |
-+--------------------------------------------------+
-|                                                  |
-|  1. ETag (Entity Tag)                            |
-|     = Empreinte digitale du contenu              |
-|     = "abc123" ou W/"abc123"                     |
-|     Precision : EXACTE (octet par octet)         |
-|                                                  |
-|  2. Last-Modified                                |
-|     = Date de derniere modification              |
-|     = "Thu, 07 Mar 2026 10:30:00 GMT"            |
-|     Precision : A LA SECONDE (moins precis)      |
-|                                                  |
-+--------------------------------------------------+
+ETag: "33a64df551425fcc"     <- souvent un hash tronqué du contenu
+ETag: "v2"                   <- ou une version applicative
+ETag: W/"33a64df551425fcc"   <- préfixe W/ = ETag faible (weak)
 ```
 
-**Analogie** :
-- **ETag** : c'est comme le numéro de serie d'un produit. Si le produit est identique, le numéro est le même. Si une seule vis change, le numéro est différent.
-- **Last-Modified** : c'est comme la date imprimee sur l'emballage. Moins précis (deux produits différents fabriques la même seconde auraient la même date).
+Règles :
+- Le client ne doit **jamais interpréter** le contenu de l'ETag (c'est opaque). MDN : *« The method by which ETag values are generated is not specified. »*
+- Deux représentations identiques doivent porter le **même** ETag.
+- Un changement de contenu **doit** changer l'ETag.
+
+### 2.3 ETag fort vs ETag faible (`W/`)
+
+Le préfixe `W/` (**case-sensitive**, majuscule W + slash) marque un validateur **faible**. MDN, verbatim : *« Weak ETag values of two representations of the same resources might be semantically equivalent, but not byte-for-byte identical. This means weak ETags prevent caching when byte range requests are used, but strong ETags mean range requests can still be cached. »*
+
+| | ETag fort | ETag faible (`W/`) |
+|---|---|---|
+| Écriture | `"abc"` | `W/"abc"` |
+| Garantit | identité **octet par octet** | équivalence **sémantique** |
+| Requêtes `Range` (téléchargement partiel) mises en cache | oui | non |
+| Cas typique | fichier statique, réponse figée | HTML dynamique avec un timestamp ou un ordre de champs qui varie sans changer le sens |
+
+Exemple : deux rendus HTML identiques à l'affichage mais dont un commentaire `<!-- généré à ... -->` diffère sont **différents en fort**, **équivalents en faible**. Pour la revalidation de cache classique, un ETag faible suffit et est même recommandé quand la sérialisation n'est pas déterministe. Dès que tu veux servir des requêtes `Range` mises en cache, il faut un ETag **fort**.
+
+### 2.4 Générer un ETag : hash de contenu vs version applicative
+
+Deux grandes stratégies.
+
+```js
+import crypto from 'node:crypto';
+
+// STRATÉGIE A — hash du contenu (précision parfaite, coûte du CPU)
+function etagFromContent(body) {
+  const hash = crypto.createHash('sha256').update(body).digest('hex').slice(0, 16);
+  return `"${hash}"`;               // fort : dérivé des octets exacts
+}
+
+// STRATÉGIE B — version applicative (zéro calcul, exige un champ version en base)
+function etagFromVersion(row) {
+  // row.version incrémenté à chaque UPDATE, ou updatedAt en base36
+  return `W/"${row.id}-${row.version}"`;   // faible : on garantit le sens, pas les octets
+}
+```
+
+- **Hash de contenu** : impossible de se tromper (même octets → même ETag), mais tu payes le hash à chaque réponse. Idéal pour des payloads petits/moyens (réponses API JSON).
+- **Version** : gratuit à calculer si tu as déjà un `version`/`updatedAt` en base, mais tu dois discipliner **chaque écriture** pour incrémenter la version. Idéal quand la ressource vient d'une base de données versionnée.
+
+### 2.5 Last-Modified et If-Modified-Since (le validateur par date)
+
+Validateur alternatif, fondé sur une **date** :
+
+```
+Last-Modified: Thu, 07 Mar 2026 10:30:00 GMT
+```
+
+Le client revalide en renvoyant cette date dans `If-Modified-Since`. MDN, verbatim : *« The server sends back the requested resource, with a 200 status, only if it has been modified after the date in the If-Modified-Since header. If the resource has not been modified since, the response is a 304 without any body »*. `If-Modified-Since` **ne s'utilise qu'avec `GET` ou `HEAD`**.
+
+Limites structurelles :
+- **Précision à la seconde** : deux modifications dans la même seconde sont indistinguables.
+- **`touch` sans changement** : un fichier re-touché change de date sans changer de contenu → fausse invalidation.
+- **Horloges désynchronisées** entre serveurs derrière un load balancer → dates incohérentes.
+
+Conclusion : `Last-Modified` est un **fallback** utile (pour les clients ou proxys qui ne gèrent pas l'ETag), pas le mécanisme principal. La spec recommande d'envoyer **les deux** quand c'est possible.
+
+### 2.6 If-None-Match : le flux 304 de revalidation
+
+`If-None-Match` est le pendant lecture de l'ETag. Le client renvoie l'ETag qu'il détient : « réponds-moi **sauf si** l'ETag correspond encore ».
+
+```
+1) Premier chargement
+   GET /api/families/42/members
+   -> 200 OK
+      ETag: "m-42-v7"
+      Cache-Control: max-age=30
+
+2) Copie stale -> le client revalide
+   GET /api/families/42/members
+   If-None-Match: "m-42-v7"          <- "j'ai la v7, encore bonne ?"
+   -> 304 Not Modified               <- PAS de corps, on garde la copie locale
+      ETag: "m-42-v7"
+      Cache-Control: max-age=30       <- le timer de fraîcheur repart
+
+3) Un membre a été ajouté -> l'ETag a changé
+   GET /api/families/42/members
+   If-None-Match: "m-42-v7"
+   -> 200 OK                         <- nouveau corps
+      ETag: "m-42-v8"
+```
+
+**Ce que renvoie exactement le `304`** (MDN, verbatim) : *« the server must return a 304 Not Modified and any of the following header fields that would have been sent in a 200 response to the same request: `Cache-Control`, `Content-Location`, `Date`, `ETag`, `Expires`, and `Vary`. »* Aucun corps — c'est là qu'est l'économie des 8 Ko.
+
+Deux détails de comparaison à connaître :
+- **Comparaison faible.** MDN : *« The comparison with the stored ETag uses the weak comparison algorithm, meaning two files are considered identical if the content is equivalent »*. Un `If-None-Match: "abc"` matche donc aussi un ETag stocké `W/"abc"`.
+- **Liste et wildcard.** `If-None-Match` peut lister plusieurs ETags séparés par des virgules (`If-None-Match: W/"67ab43", "54ed21"`), ou `*`. Le `*` sert surtout à l'upload (`PUT`) pour vérifier qu'une ressource n'existe pas déjà.
+
+### 2.7 Précédence : If-None-Match l'emporte sur If-Modified-Since
+
+Quand une requête porte **les deux** en-têtes, l'ETag gagne. MDN (page `If-None-Match`), verbatim : *« When used in combination with If-Modified-Since, If-None-Match has precedence if the server supports it. »* Réciproquement, page `If-Modified-Since` : *« When used in combination with If-None-Match, it is ignored, unless the server doesn't support If-None-Match. »*
+
+Traduction pratique : un client envoie souvent les deux (l'ETag qu'il a stocké **et** la date). Un serveur qui gère l'ETag doit évaluer `If-None-Match` **d'abord** et **ignorer** `If-Modified-Since`. `If-Modified-Since` ne sert de filet que pour les serveurs qui ne savent pas comparer d'ETag.
+
+### 2.8 Combiner Cache-Control et ETag
+
+Les deux sont complémentaires, pas concurrents :
+
+- **`Cache-Control`** décide **combien de temps** on peut servir sans même demander (fraîcheur / `max-age`).
+- **ETag** décide **quoi faire** une fois stale : revalider peu coûteusement (`304`) au lieu de re-télécharger.
+
+```
+Cache-Control: no-cache, ETag: "v7"
+  -> revalider À CHAQUE FOIS (jamais servi sans check), mais en 304 si inchangé.
+
+Cache-Control: max-age=30, ETag: "v7"
+  -> servi sans réseau pendant 30 s, puis revalidation 304/200 ensuite.
+```
+
+`no-cache` ne veut **pas** dire « ne cache pas » : il veut dire « cache, mais revalide avant chaque usage ». Combiné à un ETag, il donne toujours du contenu à jour au prix d'un simple `304` la plupart du temps. (La vraie désactivation, c'est `no-store`.)
 
 ---
 
-## 2. ETag en detail
+## 3. Worked examples
 
-### 2.1 Qu'est-ce qu'un ETag ?
+### Exemple 1 — Endpoint TribuZen qui répond 304 (If-None-Match)
 
-Un ETag (Entity Tag) est une **chaine opaque** qui identifie une version spécifique d'une ressource.
+Liste des membres d'une famille, avec ETag fort par hash de contenu et revalidation.
 
-```
-ETag: "33a64df551425fcc55e4d42a148795d9f25f89d4"
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-       Chaine quelconque (souvent un hash)
-
-ETag: "v2"
-       ^^
-       Peut etre tres simple
-
-ETag: "article-42-1709808600"
-       ^^^^^^^^^^^^^^^^^^^^^
-       Peut encoder des infos (mais c'est opaque pour le client)
-```
-
-**Regles :**
-- L'ETag est **entoure de guillemets** (c'est obligatoire dans la spec HTTP)
-- Le client ne doit **pas interpreter** le contenu de l'ETag (c'est opaque)
-- Deux ressources identiques octet-par-octet doivent avoir le **même ETag**
-- Si le contenu change d'un seul octet, l'ETag **doit changer**
-
-### 2.2 Strong ETag vs Weak ETag
-
-```
-STRONG ETAG :                          WEAK ETAG :
-==============                         ============
-ETag: "abc123"                         ETag: W/"abc123"
-                                             ^^
-                                             Prefixe W/ = "weak"
-
-Signification :                        Signification :
-Le contenu est identique               Le contenu est "semantiquement
-OCTET PAR OCTET.                       equivalent" (pas forcement
-                                       identique octet par octet).
-
-Exemple :                              Exemple :
-Deux fichiers HTML identiques          Deux fichiers HTML avec le meme
-a l'octet pres.                        contenu mais des espaces ou
-                                       commentaires differents.
-
-Utilisation :                          Utilisation :
-Requetes Range (telechargement         Revalidation de cache (cas general)
-partiel), comparaison stricte.
-```
-
-**Quand utiliser un weak ETag ?**
-
-Imagine une page web générée dynamiquement qui contient l'heure du serveur dans un commentaire HTML :
-
-```html
-<!-- Generated at 2026-03-07T10:30:00Z -->
-<html><body><h1>Contenu identique</h1></body></html>
-
-<!-- Generated at 2026-03-07T10:30:01Z -->
-<html><body><h1>Contenu identique</h1></body></html>
-```
-
-Ces deux pages sont **semantiquement identiques** (même contenu visible) mais **différentes octet par octet** (le commentaire change). Un weak ETag dirait "c'est pareil" alors qu'un strong ETag dirait "c'est différent".
-
-### 2.3 Générer des ETags avec Node.js
-
-```typescript
-// etag-generation.ts
-// Differentes strategies de generation d'ETag
-
+```js
+// members-endpoint.mjs — Node http natif, zéro dépendance
 import http from 'node:http';
 import crypto from 'node:crypto';
 
-// === STRATEGIE 1 : Hash du contenu (la plus fiable) ===
-function etagFromContent(content: string): string {
-  // Calcule un hash SHA-256 du contenu
-  // Si le contenu est identique, le hash est identique
-  const hash: string = crypto
-    .createHash('sha256')                         // Algorithme SHA-256
-    .update(content)                              // Donnees a hasher
-    .digest('hex')                                // Resultat en hexadecimal
-    .substring(0, 16);                            // Tronquer pour la brievete
-  return `"${hash}"`;                             // Guillemets obligatoires
-}
-
-// === STRATEGIE 2 : Hash MD5 (plus rapide, moins securise, OK pour ETag) ===
-function etagFromContentMD5(content: string): string {
-  const hash: string = crypto
-    .createHash('md5')                            // MD5 est plus rapide
-    .update(content)
-    .digest('base64url');                          // Base64 sans caracteres speciaux
-  return `"${hash}"`;
-}
-
-// === STRATEGIE 3 : Version numerique (simple mais manuelle) ===
-let version: number = 1;
-function etagFromVersion(): string {
-  return `"v${version}"`;
-}
-
-// === STRATEGIE 4 : Timestamp (pour Last-Modified converti en ETag) ===
-function etagFromTimestamp(lastModified: Date): string {
-  return `"${lastModified.getTime().toString(36)}"`;   // Base36 pour compacite
-}
-
-// === STRATEGIE 5 : Weak ETag (pour du contenu semantiquement equivalent) ===
-function weakEtagFromContent(content: string): string {
-  // Normaliser : supprimer les espaces multiples, les commentaires, etc.
-  const normalized: string = content.replace(/\s+/g, ' ').replace(/<!--.*?-->/g, '').trim();
-  const hash: string = crypto.createHash('md5').update(normalized).digest('hex').substring(0, 16);
-  return `W/"${hash}"`;                           // Prefixe W/ pour weak
-}
-
-// === DEMONSTRATION ===
-const content1: string = '<html><body><h1>Bonjour</h1></body></html>';
-const content2: string = '<html><body><h1>Bonjour</h1></body></html>';  // Identique
-const content3: string = '<html><body><h1>Bonsoir</h1></body></html>';  // Different
-
-console.log('=== Demonstration de generation d\'ETag ===\n');
-
-console.log('Contenu 1 :', etagFromContent(content1));
-console.log('Contenu 2 :', etagFromContent(content2));  // Doit etre IDENTIQUE a contenu 1
-console.log('Contenu 3 :', etagFromContent(content3));  // Doit etre DIFFERENT
-
-console.log('\nMD5 :', etagFromContentMD5(content1));
-console.log('Version :', etagFromVersion());
-console.log('Timestamp :', etagFromTimestamp(new Date()));
-console.log('Weak :', weakEtagFromContent(content1));
-
-// Un contenu avec des espaces differents mais semantiquement identique
-const contentA: string = '<html>  <body>  <h1>Bonjour</h1>  </body>  </html>';
-const contentB: string = '<html><body><h1>Bonjour</h1></body></html>';
-console.log('\n=== Weak ETag et espaces ===');
-console.log('Strong A :', etagFromContent(contentA));   // Different de B
-console.log('Strong B :', etagFromContent(contentB));   // Different de A
-console.log('Weak A   :', weakEtagFromContent(contentA));  // IDENTIQUE a B
-console.log('Weak B   :', weakEtagFromContent(contentB));  // IDENTIQUE a A
-```
-
-**Quelle stratégie choisir ?**
-
-| Stratégie        | Avantages                          | Inconvenients                      | Quand l'utiliser                |
-|------------------|------------------------------------|------------------------------------|---------------------------------|
-| Hash du contenu  | Precision parfaite                 | Cout CPU (calcul du hash)          | Fichiers statiques, API         |
-| Hash MD5         | Rapide a calculer                  | Collisions théoriques (rare)       | Cas général                     |
-| Version manuelle | Zero cout de calcul                | Necessite un suivi des versions    | Base de donnees avec versionning|
-| Timestamp        | Simple                             | Precision à la seconde seulement   | Fichiers sur disque             |
-| Weak ETag        | Tolere les différences cosmetiques | Moins précis                       | Contenu dynamique généré        |
-
----
-
-## 3. Last-Modified
-
-### 3.1 Le concept
-
-`Last-Modified` indique la date de dernière modification de la ressource :
-
-```
-Last-Modified: Thu, 07 Mar 2026 10:30:00 GMT
-```
-
-**Format** : RFC 7231 (toujours en GMT/UTC, format obligatoire)
-
-### 3.2 Last-Modified vs ETag
-
-| Critere              | Last-Modified                     | ETag                              |
-|----------------------|-----------------------------------|-----------------------------------|
-| Precision            | A la seconde                      | Au bit pres (strong) ou semantique (weak) |
-| Format               | Date HTTP                         | Chaine opaque                     |
-| Cout serveur         | Faible (lire la date du fichier)  | Variable (calcul de hash)         |
-| Fiabilite            | Problemes avec horloges, NFS      | Très fiable                       |
-| Priorite HTTP        | Moins prioritaire                 | Plus prioritaire (RFC 9110)       |
-
-**Problemes de Last-Modified :**
-
-```
-PROBLEME 1 : Precision limitee a la seconde
-=============================================
-Fichier modifie a 10:30:00.100
-Fichier modifie a 10:30:00.900
-Last-Modified: Thu, 07 Mar 2026 10:30:00 GMT  <-- MEME date pour les deux !
-
-Le cache croit que c'est la meme version alors que le contenu a change.
-
-
-PROBLEME 2 : Touch sans modification
-======================================
-$ touch fichier.html    # Change la date mais PAS le contenu
-Last-Modified: change alors que le contenu est identique
-Le cache croit que c'est une nouvelle version alors que rien n'a change.
-
-
-PROBLEME 3 : Horloges desynchronisees
-=======================================
-Serveur A : horloge a 10:30:00
-Serveur B : horloge a 10:29:55 (5 secondes de retard)
-
-Un load balancer qui envoie les requetes alternativement a A et B
-va produire des Last-Modified incoherents.
-```
-
-**Regle** : Si tu peux utiliser ETag, utilise ETag. Last-Modified est un **fallback** utile mais moins précis.
-
-### 3.3 Utiliser les deux ensemble
-
-La spec HTTP recommande d'envoyer **les deux** quand c'est possible :
-
-```
-HTTP/1.1 200 OK
-ETag: "a1b2c3d4e5f6"
-Last-Modified: Thu, 07 Mar 2026 10:30:00 GMT
-Cache-Control: max-age=3600
-Content-Type: text/html
-
-<html>...</html>
-```
-
-Le client utilisera ETag en priorite (via `If-None-Match`), mais `Last-Modified` sert de fallback pour les clients qui ne supportent pas ETag.
-
----
-
-## 4. Les requêtes conditionnelles
-
-### 4.1 If-None-Match (avec ETag)
-
-```
-FLOW COMPLET AVEC If-None-Match
-=================================
-
-ETAPE 1 : Premier chargement
-------------------------------
-Client:
-  GET /article/42 HTTP/1.1
-  Host: api.example.com
-
-Serveur:
-  HTTP/1.1 200 OK
-  ETag: "article-42-v3"              <-- Le serveur envoie l'ETag
-  Cache-Control: max-age=300
-  Content-Type: application/json
-  Content-Length: 2048
-
-  {"id": 42, "title": "Mon article", ...}
-
-Le client stocke : URL=/article/42, ETag="article-42-v3", contenu=...
-
-
-ETAPE 2 : Cache expire (apres 300 secondes), le client REVALIDE
------------------------------------------------------------------
-Client:
-  GET /article/42 HTTP/1.1
-  Host: api.example.com
-  If-None-Match: "article-42-v3"     <-- "J'ai la version v3, elle est encore bonne ?"
-
-Serveur verifie : ETag actuel = "article-42-v3" ? OUI, rien n'a change.
-
-Serveur:
-  HTTP/1.1 304 Not Modified          <-- PAS de body ! Enorme economie.
-  ETag: "article-42-v3"
-  Cache-Control: max-age=300          <-- Reset du timer de fraicheur
-
-Le client reutilise sa copie locale.
-
-
-ETAPE 3 : Cache expire a nouveau, MAIS le contenu a change
-------------------------------------------------------------
-Client:
-  GET /article/42 HTTP/1.1
-  Host: api.example.com
-  If-None-Match: "article-42-v3"
-
-Serveur verifie : ETag actuel = "article-42-v4" != "article-42-v3". Ca a change !
-
-Serveur:
-  HTTP/1.1 200 OK                    <-- Nouveau contenu
-  ETag: "article-42-v4"              <-- Nouvel ETag
-  Cache-Control: max-age=300
-  Content-Type: application/json
-  Content-Length: 2100
-
-  {"id": 42, "title": "Mon article modifie", ...}
-
-Le client remplace sa copie en cache.
-```
-
-### 4.2 If-Modified-Since (avec Last-Modified)
-
-```
-FLOW COMPLET AVEC If-Modified-Since
-=====================================
-
-ETAPE 1 : Premier chargement
-------------------------------
-Client:
-  GET /image.jpg HTTP/1.1
-
-Serveur:
-  HTTP/1.1 200 OK
-  Last-Modified: Mon, 01 Jan 2026 00:00:00 GMT  <-- Date de modification
-  Cache-Control: max-age=86400
-  Content-Type: image/jpeg
-  Content-Length: 524288
-
-  [524 Ko de donnees image]
-
-
-ETAPE 2 : Cache expire, le client revalide avec la date
----------------------------------------------------------
-Client:
-  GET /image.jpg HTTP/1.1
-  If-Modified-Since: Mon, 01 Jan 2026 00:00:00 GMT  <-- "Modifie depuis cette date ?"
-
-Serveur verifie : derniere modification = 1er janvier 2026. Pas de changement.
-
-Serveur:
-  HTTP/1.1 304 Not Modified
-  Last-Modified: Mon, 01 Jan 2026 00:00:00 GMT
-  Cache-Control: max-age=86400
-
-  (Pas de body ! On economise 524 Ko.)
-```
-
-### 4.3 Quand les deux sont presents
-
-Si le client envoie **les deux** headers conditionnels, le serveur doit vérifier **les deux** :
-
-```
-Client:
-  GET /page.html HTTP/1.1
-  If-None-Match: "abc123"
-  If-Modified-Since: Mon, 01 Jan 2026 00:00:00 GMT
-
-Serveur :
-  1. Verifier If-None-Match d'abord (prioritaire)
-  2. Si l'ETag correspond, verifier aussi If-Modified-Since
-  3. Les DEUX doivent valider pour renvoyer 304
-
-  Si ETag correspond ET date est ancienne --> 304
-  Si ETag ne correspond pas              --> 200 (nouveau contenu)
-```
-
-### 4.4 Diagramme récapitulatif
-
-```
-Client envoie une requete GET
-           |
-           v
-+------------------------+
-| Cache local existe ?   |
-+------------------------+
-  |                  |
-  NON               OUI
-  |                  |
-  v                  v
-GET simple        Le cache est-il frais ?
-(pas de           (age < max-age)
-headers              |           |
-conditionnels)      OUI         NON
-  |                  |           |
-  v                  v           v
-200 OK          Servir du     Envoyer des headers
-(complet)       cache local   conditionnels :
-                (0 requete    If-None-Match: <ETag>
-                 reseau)      If-Modified-Since: <date>
-                                     |
-                                     v
-                            +------------------+
-                            | Serveur verifie  |
-                            +------------------+
-                              |              |
-                           Change ?       Pas change ?
-                              |              |
-                              v              v
-                           200 OK        304 Not Modified
-                           (complet)     (pas de body)
-                              |              |
-                              v              v
-                           Remplacer     Reutiliser
-                           le cache      le cache local
-                           local         + reset timer
-```
-
----
-
-## 5. Implementation complete en Node.js
-
-### 5.1 Serveur avec ETag et validation conditionnelle
-
-```typescript
-// server-etag-complete.ts
-// Serveur HTTP avec gestion complete de ETag et validation conditionnelle
-
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-import crypto from 'node:crypto';
-
-interface Article {
-  id: number;
-  title: string;
-  content: string;
-  updatedAt: Date;
-}
-
-// --- Simuler une base de donnees ---
-const database: { articles: Record<number, Article> } = {
-  articles: {
-    1: { id: 1, title: 'Introduction au caching HTTP', content: 'Le cache HTTP est...', updatedAt: new Date('2026-01-15') },
-    2: { id: 2, title: 'Les headers essentiels', content: 'Cache-Control est...', updatedAt: new Date('2026-02-20') },
-    3: { id: 3, title: 'ETag en pratique', content: 'Un ETag identifie...', updatedAt: new Date('2026-03-01') },
-  }
+// "Base de données" en mémoire
+const families = {
+  42: [
+    { id: 'm1', name: 'Alice', role: 'admin' },
+    { id: 'm2', name: 'Bob', role: 'member' },
+  ],
 };
 
-// --- Fonction pour generer un ETag a partir du contenu ---
-function generateETag(data: unknown): string {
-  const json: string = JSON.stringify(data);
-  const hash: string = crypto
-    .createHash('md5')          // Hash MD5 (suffisant pour un ETag)
-    .update(json)               // Hasher le contenu JSON
-    .digest('hex')              // Resultat en hexadecimal
-    .substring(0, 16);          // Tronquer a 16 caracteres
-  return `"${hash}"`;           // Entourer de guillemets (obligatoire)
+// ETag FORT dérivé du corps exact qu'on va renvoyer
+function strongEtag(body) {
+  const hash = crypto.createHash('sha256').update(body).digest('hex').slice(0, 16);
+  return `"${hash}"`;                         // guillemets = partie de la syntaxe
 }
 
-// --- Fonction pour formater une date HTTP ---
-function formatHttpDate(date: Date): string {
-  return date.toUTCString();    // "Thu, 07 Mar 2026 10:30:00 GMT"
-}
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  const { method, url } = req;
-
-  // --- Router ---
-  const match: RegExpMatchArray | null = (url ?? '').match(/^\/api\/articles\/(\d+)$/);
-
-  if (method === 'GET' && match) {
-    const id: number = parseInt(match[1]);
-    const article: Article | undefined = database.articles[id];
-
-    // 404 si l'article n'existe pas
-    if (!article) {
+const server = http.createServer((req, res) => {
+  const m = (req.url ?? '').match(/^\/api\/families\/(\d+)\/members$/);
+  if (req.method === 'GET' && m) {
+    const members = families[m[1]];
+    if (!members) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ error: 'Article non trouve' }));
+      return res.end('{"error":"famille inconnue"}');
     }
 
-    // --- Generer les validateurs ---
-    const etag: string = generateETag(article);
-    const lastModified: string = formatHttpDate(article.updatedAt);
+    const body = JSON.stringify(members);
+    const etag = strongEtag(body);            // même corps -> même ETag
 
-    // --- Verification conditionnelle : If-None-Match (ETag) ---
-    const ifNoneMatch: string | undefined = req.headers['if-none-match'];
-    if (ifNoneMatch) {
-      // Le client peut envoyer plusieurs ETags : "v1", "v2", "v3"
-      const clientETags: string[] = ifNoneMatch.split(',').map(e => e.trim());
-
-      if (clientETags.includes(etag)) {
-        // L'ETag correspond ! Le contenu n'a pas change.
-        console.log(`[304] Article ${id} - ETag match (${etag})`);
-        res.writeHead(304, {
-          'ETag': etag,
-          'Last-Modified': lastModified,
-          'Cache-Control': 'public, max-age=60',
-        });
-        return res.end();  // PAS de body !
-      }
+    // --- Revalidation : le client détient-il déjà cette version ? ---
+    // If-None-Match peut lister plusieurs ETags séparés par des virgules.
+    const inm = req.headers['if-none-match'];
+    if (inm && inm.split(',').map((s) => s.trim()).includes(etag)) {
+      // Rien n'a changé : 304 SANS corps. On renvoie les en-têtes qu'un 200
+      // aurait portés (ETag + Cache-Control) pour relancer le cycle.
+      res.writeHead(304, { ETag: etag, 'Cache-Control': 'max-age=30' });
+      return res.end();                       // pas de body -> on économise les octets
     }
 
-    // --- Verification conditionnelle : If-Modified-Since (date) ---
-    const ifModifiedSince: string | undefined = req.headers['if-modified-since'];
-    if (ifModifiedSince && !ifNoneMatch) {
-      // On ne verifie If-Modified-Since que si If-None-Match est absent
-      // (ETag est prioritaire selon la spec)
-      const clientDate: Date = new Date(ifModifiedSince);
-      if (article.updatedAt <= clientDate) {
-        // Pas modifie depuis la date du client
-        console.log(`[304] Article ${id} - Not modified since ${ifModifiedSince}`);
-        res.writeHead(304, {
-          'ETag': etag,
-          'Last-Modified': lastModified,
-          'Cache-Control': 'public, max-age=60',
-        });
-        return res.end();
-      }
-    }
-
-    // --- Reponse complete (200 OK) ---
-    const body: string = JSON.stringify(article);
-    console.log(`[200] Article ${id} - Envoi complet (${Buffer.byteLength(body)} octets)`);
-
+    // --- Réponse complète 200 ---
     res.writeHead(200, {
       'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body),
-      'ETag': etag,                             // Validateur ETag
-      'Last-Modified': lastModified,            // Validateur Last-Modified
-      'Cache-Control': 'public, max-age=60',    // Frais pendant 60 secondes
-      'Vary': 'Accept-Encoding',                // Important si compression activee
+      ETag: etag,                             // le client stockera cet ETag
+      'Cache-Control': 'max-age=30',          // fraîcheur 30 s, puis revalidation
     });
     res.end(body);
-  }
-
-  // --- Liste des articles ---
-  else if (method === 'GET' && url === '/api/articles') {
-    const articles: Article[] = Object.values(database.articles);
-    const body: string = JSON.stringify(articles);
-    const etag: string = generateETag(articles);
-
-    const ifNoneMatch: string | undefined = req.headers['if-none-match'];
-    if (ifNoneMatch && ifNoneMatch.includes(etag)) {
-      res.writeHead(304, { 'ETag': etag, 'Cache-Control': 'public, max-age=30' });
-      return res.end();
-    }
-
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'ETag': etag,
-      'Cache-Control': 'public, max-age=30',
-    });
-    res.end(body);
-  }
-
-  // --- Mettre a jour un article (pour tester que l'ETag change) ---
-  else if (method === 'PUT' && match) {
-    const id: number = parseInt(match[1]);
-    let body: string = '';
-    req.on('data', (chunk: Buffer) => body += chunk);
-    req.on('end', () => {
-      try {
-        const updates: Partial<Article> = JSON.parse(body);
-        if (database.articles[id]) {
-          database.articles[id] = {
-            ...database.articles[id],
-            ...updates,
-            updatedAt: new Date(),   // Met a jour la date de modification
-          };
-          const newEtag: string = generateETag(database.articles[id]);
-          console.log(`[200] Article ${id} mis a jour - Nouvel ETag: ${newEtag}`);
-          res.writeHead(200, {
-            'Content-Type': 'application/json',
-            'ETag': newEtag,
-          });
-          res.end(JSON.stringify(database.articles[id]));
-        } else {
-          res.writeHead(404);
-          res.end(JSON.stringify({ error: 'Article non trouve' }));
-        }
-      } catch (e) {
-        res.writeHead(400);
-        res.end(JSON.stringify({ error: 'JSON invalide' }));
-      }
-    });
-  }
-
-  else {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('API ETag Demo\nRoutes: GET /api/articles, GET /api/articles/:id, PUT /api/articles/:id');
+  } else {
+    res.writeHead(404).end();
   }
 });
 
-server.listen(3000, () => {
-  console.log('=== Serveur ETag Demo ===');
-  console.log('http://localhost:3000');
-  console.log('');
-  console.log('Tester :');
-  console.log('  curl -v http://localhost:3000/api/articles/1');
-  console.log('  curl -v -H \'If-None-Match: "<copier l-etag-ici>"\' http://localhost:3000/api/articles/1');
-  console.log('  curl -X PUT -H "Content-Type: application/json" -d \'{"title":"Nouveau titre"}\' http://localhost:3000/api/articles/1');
-  console.log('');
-});
+server.listen(3000);
 ```
 
-### 5.2 Tester le serveur étape par étape
+Vérification au `curl` :
 
 ```bash
-# ETAPE 1 : Premier chargement (200 OK avec ETag)
-curl -v http://localhost:3000/api/articles/1
-# < HTTP/1.1 200 OK
-# < ETag: "a1b2c3d4e5f6g7h8"
-# < Cache-Control: public, max-age=60
-# < Content-Type: application/json
-# {"id":1,"title":"Introduction au caching HTTP",...}
+# 1) Premier GET : 200 + ETag
+curl -i http://localhost:3000/api/families/42/members
+# HTTP/1.1 200 OK
+# ETag: "9f2c1a4b7d3e5f80"
 
-# ETAPE 2 : Revalidation avec If-None-Match (304)
-curl -v -H 'If-None-Match: "a1b2c3d4e5f6g7h8"' \
-  http://localhost:3000/api/articles/1
-# < HTTP/1.1 304 Not Modified
-# < ETag: "a1b2c3d4e5f6g7h8"
-# (PAS DE BODY !)
-
-# ETAPE 3 : Modifier l'article (l'ETag va changer)
-curl -X PUT -H "Content-Type: application/json" \
-  -d '{"title":"Titre modifie"}' \
-  http://localhost:3000/api/articles/1
-# < HTTP/1.1 200 OK
-# < ETag: "x9y8z7w6v5u4t3s2"    <-- NOUVEL ETag
-
-# ETAPE 4 : Revalidation avec l'ANCIEN ETag (200 car change)
-curl -v -H 'If-None-Match: "a1b2c3d4e5f6g7h8"' \
-  http://localhost:3000/api/articles/1
-# < HTTP/1.1 200 OK              <-- 200 car l'ETag ne correspond plus
-# < ETag: "x9y8z7w6v5u4t3s2"    <-- Nouvel ETag
-# {"id":1,"title":"Titre modifie",...}
+# 2) Revalidation avec l'ETag : 304, aucun corps
+curl -i -H 'If-None-Match: "9f2c1a4b7d3e5f80"' \
+     http://localhost:3000/api/families/42/members
+# HTTP/1.1 304 Not Modified
+# (pas de corps)
 ```
 
----
+Le second appel fait bien un aller-retour réseau, mais ne transfère pas les octets de la liste : c'est exactement l'économie visée.
 
-## 6. Performance : les chiffres
+### Exemple 2 — Ajouter Last-Modified/If-Modified-Since en fallback (et respecter la précédence)
 
-### 6.1 Comparaison des tailles de réponse
+On enrichit le même endpoint avec une date de dernière modification. La règle : si `If-None-Match` est présent, on l'évalue **et on ignore** `If-Modified-Since` (§2.7).
 
-```
-+---------------------------------------------------+
-|        TAILLE DES REPONSES : 200 vs 304            |
-+---------------------------------------------------+
-|                                                   |
-| Ressource        | 200 OK    | 304 Not Modified  |
-|                  | (complet)  | (headers seuls)    |
-|------------------|-----------|-------------------|
-| Page HTML        | ~50 Ko    | ~200 octets       |
-| Fichier JS       | ~300 Ko   | ~200 octets       |
-| Image JPEG       | ~500 Ko   | ~200 octets       |
-| Reponse API JSON | ~10 Ko    | ~200 octets       |
-| Gros fichier     | ~5 Mo     | ~200 octets       |
-|                                                   |
-| Economie typique :  95% - 99.99%                  |
-+---------------------------------------------------+
-```
-
-### 6.2 Impact sur le temps de chargement
-
-```
-SCENARIO : Page avec 50 ressources, connexion 4G (50 Mbps, 50ms latence)
-
-SANS VALIDATION CONDITIONNELLE (tout en 200) :
-  50 ressources x 100 Ko en moyenne = 5 Mo a telecharger
-  Temps de transfert : 5 Mo / 50 Mbps = ~800ms
-  Temps total avec latence : ~800ms + 50ms = ~850ms
-
-AVEC VALIDATION CONDITIONNELLE (45 en 304, 5 en 200) :
-  5 ressources changees x 100 Ko = 500 Ko a telecharger
-  45 reponses 304 x 200 octets = ~9 Ko
-  Temps de transfert : 509 Ko / 50 Mbps = ~80ms
-  Temps total avec latence : ~80ms + 50ms = ~130ms
-
-AMELIORATION : 85% plus rapide !
-```
-
-### 6.3 Comparaison des couts serveur
-
-```
-REQUETE AVEC 200 OK (contenu complet) :
-=========================================
-1. Lire l'article de la base de donnees
-2. Serialiser en JSON
-3. Calculer les headers
-4. Envoyer le body complet sur le reseau
-CPU: ****     I/O reseau: *********
-Temps total: ~10ms
-
-
-REQUETE AVEC 304 NOT MODIFIED :
-================================
-1. Lire l'ETag de la base (ou du cache serveur)
-2. Comparer avec le If-None-Match du client
-3. Envoyer 304 (pas de body)
-CPU: **       I/O reseau: *
-Temps total: ~2ms
-
-Economie serveur: ~80% de CPU et I/O en moins !
-```
-
----
-
-## 7. ETag pour les fichiers statiques
-
-### 7.1 Serveur de fichiers avec ETag automatique
-
-```typescript
-// server-static-etag.ts
-// Serveur de fichiers statiques avec ETag et Last-Modified
-
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
-
-const STATIC_DIR: string = path.join(__dirname, 'public');
-
-// Types MIME courants
-const MIME_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css',
-  '.js': 'application/javascript',
-  '.json': 'application/json',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
+```js
+// members-endpoint.mjs — extrait enrichi
+const families = {
+  42: {
+    members: [
+      { id: 'm1', name: 'Alice', role: 'admin' },
+      { id: 'm2', name: 'Bob', role: 'member' },
+    ],
+    // date de dernière modification de CETTE ressource (mise à jour à chaque écriture)
+    lastModified: new Date('2026-03-07T10:30:00Z'),
+  },
 };
 
-function getContentType(filePath: string): string {
-  const ext: string = path.extname(filePath);
-  return MIME_TYPES[ext] || 'application/octet-stream';
-}
+function handleMembers(req, res, fam) {
+  const body = JSON.stringify(fam.members);
+  const etag = strongEtag(body);
+  const lastModified = fam.lastModified.toUTCString(); // format HTTP-date obligatoire
 
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  // Securite : empecher les traversals de repertoire
-  const safePath: string = path.normalize(req.url ?? '/').replace(/^(\.\.[\/\\])+/, '');
-  const filePath: string = path.join(STATIC_DIR, safePath === '/' ? 'index.html' : safePath);
+  const inm = req.headers['if-none-match'];
+  const ims = req.headers['if-modified-since'];
 
-  // Verifier que le fichier existe
-  fs.stat(filePath, (err: NodeJS.ErrnoException | null, stats: fs.Stats) => {
-    if (err || !stats.isFile()) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      return res.end('Fichier non trouve');
-    }
-
-    // --- Generer les validateurs ---
-    // ETag base sur la taille + date de modification (methode rapide)
-    const etag: string = `"${stats.size.toString(16)}-${stats.mtimeMs.toString(16)}"`;
-    const lastModified: string = stats.mtime.toUTCString();
-
-    // --- Determiner la strategie de cache selon le type de fichier ---
-    const ext: string = path.extname(filePath);
-    let cacheControl: string;
-
-    if ((req.url ?? '').match(/\.[a-f0-9]{8,}\./)) {
-      // Fichier avec hash dans le nom (ex: app.a1b2c3d4.js)
-      cacheControl = 'public, max-age=31536000, immutable';
-    } else if (['.html'].includes(ext)) {
-      // Fichiers HTML : toujours revalider
-      cacheControl = 'public, no-cache';
-    } else if (['.css', '.js'].includes(ext)) {
-      // CSS/JS sans hash : cache court
-      cacheControl = 'public, max-age=3600';
-    } else if (['.png', '.jpg', '.gif', '.webp', '.svg'].includes(ext)) {
-      // Images : cache moyen
-      cacheControl = 'public, max-age=86400';
-    } else {
-      cacheControl = 'public, max-age=3600';
-    }
-
-    // --- Verification conditionnelle ---
-    const ifNoneMatch: string | undefined = req.headers['if-none-match'];
-    const ifModifiedSince: string | undefined = req.headers['if-modified-since'];
-
-    // Priorite 1 : If-None-Match (ETag)
-    if (ifNoneMatch && ifNoneMatch === etag) {
-      console.log(`[304] ${req.url} (ETag match)`);
-      res.writeHead(304, {
-        'ETag': etag,
-        'Last-Modified': lastModified,
-        'Cache-Control': cacheControl,
-      });
+  // 1) ETAG D'ABORD — si présent, il a la précédence et If-Modified-Since est ignoré.
+  if (inm) {
+    if (inm.split(',').map((s) => s.trim()).includes(etag)) {
+      res.writeHead(304, { ETag: etag, 'Last-Modified': lastModified, 'Cache-Control': 'max-age=30' });
       return res.end();
     }
-
-    // Priorite 2 : If-Modified-Since
-    if (ifModifiedSince && !ifNoneMatch) {
-      const clientDate: Date = new Date(ifModifiedSince);
-      if (stats.mtime <= clientDate) {
-        console.log(`[304] ${req.url} (Not modified since)`);
-        res.writeHead(304, {
-          'ETag': etag,
-          'Last-Modified': lastModified,
-          'Cache-Control': cacheControl,
-        });
-        return res.end();
-      }
+  } else if (ims) {
+    // 2) FALLBACK par date — seulement si aucun ETag n'a été fourni.
+    //    304 si la ressource n'a pas changé APRÈS la date envoyée par le client.
+    //    Comparaison à la seconde -> on tronque les millisecondes des deux côtés.
+    const since = Math.floor(Date.parse(ims) / 1000);
+    const modified = Math.floor(fam.lastModified.getTime() / 1000);
+    if (!Number.isNaN(since) && modified <= since) {
+      res.writeHead(304, { ETag: etag, 'Last-Modified': lastModified, 'Cache-Control': 'max-age=30' });
+      return res.end();
     }
+  }
 
-    // --- Reponse complete ---
-    console.log(`[200] ${req.url} (${stats.size} octets)`);
-    res.writeHead(200, {
-      'Content-Type': getContentType(filePath),
-      'Content-Length': stats.size,
-      'ETag': etag,
-      'Last-Modified': lastModified,
-      'Cache-Control': cacheControl,
-      'Vary': 'Accept-Encoding',
-    });
-
-    // Streamer le fichier (efficace pour les gros fichiers)
-    const readStream: fs.ReadStream = fs.createReadStream(filePath);
-    readStream.pipe(res);
+  // Sinon : réponse complète, avec LES DEUX validateurs.
+  res.writeHead(200, {
+    'Content-Type': 'application/json',
+    ETag: etag,
+    'Last-Modified': lastModified,
+    'Cache-Control': 'max-age=30',
   });
-});
-
-server.listen(3000, () => {
-  console.log('Serveur de fichiers statiques sur http://localhost:3000');
-  console.log(`Repertoire: ${STATIC_DIR}`);
-});
+  res.end(body);
+}
 ```
-
----
-
-## 8. ETag et les outils de build
-
-### 8.1 La stratégie "hash dans le nom" vs ETag
-
-```
-DEUX STRATEGIES COMPLEMENTAIRES
-=================================
-
-STRATEGIE 1 : Hash dans le nom de fichier (cache-busting)
------------------------------------------------------------
-/assets/app.a1b2c3d4.js
-                ^^^^^^^^
-                Hash du contenu
-
-- Le contenu change ? Le hash change. L'URL change.
-- L'ancienne URL n'est plus referencee (mort naturelle du cache).
-- Pas besoin de ETag car l'URL EST l'identifiant de version.
-- Cache-Control: max-age=31536000, immutable
-
-STRATEGIE 2 : ETag (revalidation)
------------------------------------
-/index.html
-ETag: "abc123"
-
-- L'URL ne change PAS quand le contenu change.
-- ETag permet de verifier si le contenu a change.
-- Cache-Control: no-cache (ou max-age court + must-revalidate)
-
-
-EN PRATIQUE, ON UTILISE LES DEUX :
-====================================
-
-index.html (ETag + no-cache)
-  |
-  +-- <link href="/assets/style.a1b2c3.css">  (hash + immutable)
-  +-- <script src="/assets/app.d4e5f6.js">    (hash + immutable)
-  +-- <img src="/images/logo.png">             (ETag + max-age moyen)
-
-Le HTML est toujours revalide (pour decouvrir les nouveaux hashes).
-Les assets avec hash sont caches pour toujours.
-Les images sans hash utilisent ETag pour revalidation.
-```
-
-### 8.2 Flow complet d'un déploiement
-
-```
-AVANT LE DEPLOIEMENT :
-========================
-index.html --> <script src="/app.a1b2c3.js">
-/app.a1b2c3.js  (Cache-Control: immutable, max-age=31536000)
-
-En cache chez les utilisateurs :
-  index.html (ETag: "html-v1")
-  app.a1b2c3.js (cache pour 1 an)
-
-
-DEPLOIEMENT : le code JS a change
-====================================
-Outil de build genere : /app.d4e5f6.js (nouveau hash)
-index.html est modifie : <script src="/app.d4e5f6.js">
-
-
-APRES LE DEPLOIEMENT :
-========================
-Utilisateur revient sur le site.
-
-1. Navigateur : "J'ai index.html en cache avec no-cache"
-   --> Revalide : If-None-Match: "html-v1"
-   --> Serveur : "Le HTML a change !" --> 200 OK, ETag: "html-v2"
-   --> Nouveau HTML reference /app.d4e5f6.js
-
-2. Navigateur : "J'ai besoin de /app.d4e5f6.js"
-   --> Pas en cache (nouvelle URL) --> 200 OK
-   --> Cache pour 1 an
-
-3. L'ancien /app.a1b2c3.js reste en cache mais
-   n'est plus jamais reference. Il expirera naturellement.
-
-RESULTAT : L'utilisateur a la nouvelle version en 1 revalidation
-du HTML + 1 telechargement du nouveau JS.
-```
-
----
-
-## Points clés
-
-1. **La validation conditionnelle** evite de re-telecharger des ressources inchangees, economisant bande passante et temps.
-2. **ETag** est une empreinte du contenu. Strong ETag (`"abc"`) = identique octet par octet. Weak ETag (`W/"abc"`) = semantiquement équivalent.
-3. **Last-Modified** est un validateur base sur la date, moins précis que ETag (précision à la seconde seulement).
-4. **If-None-Match** + ETag = couple de revalidation principal. **If-Modified-Since** + Last-Modified = fallback.
-5. **304 Not Modified** economise 95-99% de la bande passante car il n'y a pas de body dans la réponse.
-6. **Combiner hash-dans-le-nom (immutable) et ETag (revalidation)** est la stratégie optimale pour un site web moderne.
-
----
-
-## Lab associe
-
--> `labs/05-etag-et-revalidation.md` — Implementer un serveur avec ETag et observer les 304
-
----
-
-## Pour aller plus loin
-
-- [MDN — ETag](https://developer.mozilla.org/fr/docs/Web/HTTP/Headers/ETag)
-- [MDN — If-None-Match](https://developer.mozilla.org/fr/docs/Web/HTTP/Headers/If-None-Match)
-- [MDN — Requetes conditionnelles](https://developer.mozilla.org/fr/docs/Web/HTTP/Conditional_requests)
-- [RFC 9110, Section 8.8 — Validators](https://www.rfc-editor.org/rfc/rfc9110#section-8.8)
-- [RFC 9110, Section 13 — Conditional Requests](https://www.rfc-editor.org/rfc/rfc9110#section-13)
-
----
-
-## Si tu es perdu
-
-**Retiens juste ceci :**
-
-1. Le serveur envoie un **ETag** (empreinte) avec la réponse : `ETag: "v1"`
-2. La prochaine fois, le client dit : `If-None-Match: "v1"` ("j'ai la version v1, c'est encore bon ?")
-3. Si rien n'a change, le serveur repond **304** (sans body = très rapide)
-4. Si ça a change, le serveur repond **200** avec le nouveau contenu et un nouvel ETag
-
-C'est comme montrer ta photocopie au bureau d'information et demander "c'est encore a jour ?". S'ils disent oui, tu repars avec ta photocopie. S'ils disent non, ils t'en donnent une nouvelle.
-
----
-
-## Exercice pratique — Chrome DevTools
-
-### Objectif
-
-Observer le mécanisme complet de validation conditionnelle dans Chrome DevTools : voir le ETag dans la réponse, le If-None-Match dans la requête suivante, et le status 304 Not Modified. Mesurer les economies de bande passante.
-
-### Etapes
-
-1. **Lancer le serveur lab-04**
-   - Ouvre un terminal et lance le serveur de demonstration :
-   ```bash
-   node labs/lab-04-etag-conditional/solution.js
-   ```
-   - Le serveur demarre sur `http://localhost:3000`
-
-2. **Premier chargement — Observer le 200 et le ETag**
-   - Ouvre Chrome et va sur `http://localhost:3000/api/articles/1`
-   - Ouvre DevTools (`F12`) > onglet **Network**
-   - Recharge la page (`F5`) pour capturer la requête
-   - Clique sur la requête dans la liste
-   - Dans **Response Headers**, repere :
-     - `ETag: "..."` — c'est l'empreinte du contenu que le serveur envoie
-     - `Cache-Control: public, max-age=60` — la réponse est fraiche pendant 60 secondes
-     - `Last-Modified: ...` — la date de dernière modification
-   - Note la valeur du ETag (par exemple `"a1b2c3d4e5f6g7h8"`)
-   - Observe le **Status Code** : `200 OK`
-   - Observe la colonne **Size** : une taille en octets (ex: `256 B`) — le body complet a ete transfere
-
-3. **Attendre l'expiration et recharger — Observer le 304 et le If-None-Match**
-   - Attends que le `max-age` expire (60 secondes) ou, pour aller plus vite, coche **Disable cache** puis decoche-la (cela vide le cache temporairement)
-   - Sinon, pour forcer la revalidation sans attendre : ferme l'onglet, rouvre-le, et recharge
-   - Recharge la page (`F5`)
-   - Clique sur la nouvelle requête
-   - Dans **Request Headers**, repere :
-     - `If-None-Match: "a1b2c3d4e5f6g7h8"` — le navigateur envoie le ETag qu'il avait stocke
-   - Dans la ligne de statut, observe : `304 Not Modified`
-   - Observe la colonne **Size** : la taille est très petite (seulement les headers, pas de body)
-
-4. **Comparer les economies de bande passante**
-   - Dans la colonne **Size**, compare :
-     - Premier chargement (200) : taille complete du body (ex: `256 B`)
-     - Revalidation (304) : taille très reduite (ex: `120 B` — seulement les headers)
-   - Pour voir la taille exacte transferee, clique sur la requête 304 et regarde l'onglet **Headers** :
-     - Il n'y a **pas de section "Response" dans l'onglet Preview/Response** car le body est vide
-   - Observe aussi la colonne **Time** : la réponse 304 est plus rapide car le serveur n'a pas eu a serialiser et envoyer le contenu
-
-5. **Modifier la ressource et observer le changement de ETag**
-   - Dans un autre onglet ou avec curl, modifie la ressource :
-   ```bash
-   curl -X PUT -H "Content-Type: application/json" \
-     -d '{"title":"Titre modifie"}' \
-     http://localhost:3000/api/articles/1
-   ```
-   - Retourne dans l'onglet Chrome et recharge (`F5`)
-   - Observe :
-     - Le navigateur envoie toujours `If-None-Match` avec l'ancien ETag
-     - Mais cette fois, le serveur repond `200 OK` avec un **nouveau ETag** (car le contenu a change)
-     - La colonne **Size** affiche la taille complete du nouveau contenu
-   - Verifie que le nouvel ETag dans **Response Headers** est différent de l'ancien
-
-6. **Vérifier avec la console du serveur**
-   - Regarde le terminal ou le serveur tourne
-   - Tu devrais voir les logs :
-   ```
-   [200] Article 1 - Envoi complet (256 octets)    <-- Premier chargement
-   [304] Article 1 - ETag match ("a1b2c3d4...")     <-- Revalidation reussie
-   [200] Article 1 - Envoi complet (280 octets)    <-- Apres modification
-   ```
-   - Les lignes 304 confirment que le serveur n'a pas eu besoin d'envoyer le body
-
-### Ce que tu devrais observer
-
-```
-Requete 1 (premier chargement) :
-  Status: 200 OK
-  Response Headers: ETag: "a1b2c3d4e5f6g7h8"
-  Size: 256 B (body complet transfere)
-  Time: 15ms
-
-Requete 2 (revalidation, contenu inchange) :
-  Request Headers: If-None-Match: "a1b2c3d4e5f6g7h8"
-  Status: 304 Not Modified
-  Size: ~120 B (headers seulement, PAS de body)
-  Time: 8ms
-
-Requete 3 (apres modification du contenu) :
-  Request Headers: If-None-Match: "a1b2c3d4e5f6g7h8" (ancien ETag)
-  Status: 200 OK
-  Response Headers: ETag: "x9y8z7w6v5u4t3s2" (NOUVEAU ETag)
-  Size: 280 B (nouveau body complet)
-  Time: 12ms
-```
-
-### Questions de reflexion
-
-- Pourquoi le navigateur envoie-t-il automatiquement le header `If-None-Match` lors du deuxieme chargement ?
-- Quelle est l'economie de bande passante entre une réponse 200 et une réponse 304 pour cette ressource ?
-- Que se passerait-il si le serveur ne supportait pas les ETags ? (Indice : chaque requête serait un 200 complet)
-- Dans quel onglet de DevTools peux-tu confirmer que la réponse 304 n'a **pas de body** ?
-
----
-
-## Defi
-
-### Implementer un cache intelligent
-
-**Objectif** : Créer un serveur Node.js qui géré correctement les ETags pour une API de taches (todo list).
-
-**Cahier des charges :**
-
-1. `GET /api/todos` retourne la liste des taches avec un ETag
-2. `GET /api/todos/:id` retourne une tache spécifique avec un ETag
-3. `POST /api/todos` créé une tache (l'ETag de la liste change)
-4. `PUT /api/todos/:id` modifie une tache (l'ETag de cette tache ET de la liste changent)
-5. `DELETE /api/todos/:id` supprime une tache
-6. Toutes les requêtes GET supportent `If-None-Match` pour la revalidation
-7. Le serveur log "304" ou "200" pour chaque requête GET
-
-**Test :**
 
 ```bash
-# 1. Charger la liste (200)
-curl -v http://localhost:3000/api/todos
-# Noter le ETag
+# Fallback par date : le client n'a pas d'ETag, seulement la date
+curl -i -H 'If-Modified-Since: Thu, 07 Mar 2026 10:30:00 GMT' \
+     http://localhost:3000/api/families/42/members
+# HTTP/1.1 304 Not Modified   (la ressource n'a pas changé depuis cette date)
 
-# 2. Recharger avec le ETag (devrait etre 304)
-curl -v -H 'If-None-Match: "<etag>"' http://localhost:3000/api/todos
-
-# 3. Ajouter une tache
-curl -X POST -H "Content-Type: application/json" \
-  -d '{"title":"Apprendre les ETags"}' \
-  http://localhost:3000/api/todos
-
-# 4. Recharger avec l'ancien ETag (devrait etre 200 car la liste a change)
-curl -v -H 'If-None-Match: "<ancien-etag>"' http://localhost:3000/api/todos
+# Les DEUX en-têtes ensemble : l'ETag mène. Un If-Modified-Since même "vieux"
+# est ignoré, seul le match d'ETag décide.
+curl -i -H 'If-None-Match: "9f2c1a4b7d3e5f80"' \
+        -H 'If-Modified-Since: Thu, 01 Jan 1970 00:00:00 GMT' \
+        http://localhost:3000/api/families/42/members
+# HTTP/1.1 304 Not Modified   (décidé par l'ETag, pas par la date)
 ```
 
-<details>
-<summary>Solution</summary>
-
-```typescript
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-import crypto from 'node:crypto';
-
-interface Todo {
-  id: number;
-  title: string;
-  done: boolean;
-}
-
-const todos: Todo[] = [
-  { id: 1, title: 'Lire le Module 05', done: false },
-  { id: 2, title: 'Comprendre les ETags', done: false },
-];
-let nextId: number = 3;
-
-function etag(data: unknown): string {
-  const hash: string = crypto.createHash('md5').update(JSON.stringify(data)).digest('hex').substring(0, 16);
-  return `"${hash}"`;
-}
-
-function checkETag(req: IncomingMessage, res: ServerResponse, data: unknown, cacheControl: string): boolean {
-  const tag: string = etag(data);
-  const ifNoneMatch: string | undefined = req.headers['if-none-match'];
-  if (ifNoneMatch && ifNoneMatch === tag) {
-    console.log(`[304] ${req.url}`);
-    res.writeHead(304, { 'ETag': tag, 'Cache-Control': cacheControl });
-    res.end();
-    return true;
-  }
-  return false;
-}
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  const { method, url } = req;
-  const match: RegExpMatchArray | null = (url ?? '').match(/^\/api\/todos\/(\d+)$/);
-  const json = { 'Content-Type': 'application/json' };
-
-  if (method === 'GET' && url === '/api/todos') {
-    if (checkETag(req, res, todos, 'public, max-age=10')) return;
-    console.log(`[200] ${url}`);
-    const body: string = JSON.stringify(todos);
-    res.writeHead(200, { ...json, 'ETag': etag(todos), 'Cache-Control': 'public, max-age=10' });
-    res.end(body);
-  }
-  else if (method === 'GET' && match) {
-    const todo: Todo | undefined = todos.find(t => t.id === parseInt(match[1]));
-    if (!todo) { res.writeHead(404, json); return res.end('{"error":"Not found"}'); }
-    if (checkETag(req, res, todo, 'public, max-age=30')) return;
-    console.log(`[200] ${url}`);
-    res.writeHead(200, { ...json, 'ETag': etag(todo), 'Cache-Control': 'public, max-age=30' });
-    res.end(JSON.stringify(todo));
-  }
-  else if (method === 'POST' && url === '/api/todos') {
-    let body: string = '';
-    req.on('data', (c: Buffer) => body += c);
-    req.on('end', () => {
-      const data: { title: string } = JSON.parse(body);
-      const todo: Todo = { id: nextId++, title: data.title, done: false };
-      todos.push(todo);
-      res.writeHead(201, { ...json, 'Location': `/api/todos/${todo.id}` });
-      res.end(JSON.stringify(todo));
-    });
-  }
-  else if (method === 'PUT' && match) {
-    let body: string = '';
-    req.on('data', (c: Buffer) => body += c);
-    req.on('end', () => {
-      const idx: number = todos.findIndex(t => t.id === parseInt(match[1]));
-      if (idx === -1) { res.writeHead(404, json); return res.end('{"error":"Not found"}'); }
-      const data: Partial<Todo> = JSON.parse(body);
-      todos[idx] = { ...todos[idx], ...data };
-      res.writeHead(200, { ...json, 'ETag': etag(todos[idx]) });
-      res.end(JSON.stringify(todos[idx]));
-    });
-  }
-  else if (method === 'DELETE' && match) {
-    const idx: number = todos.findIndex(t => t.id === parseInt(match[1]));
-    if (idx === -1) { res.writeHead(404, json); return res.end('{"error":"Not found"}'); }
-    todos.splice(idx, 1);
-    res.writeHead(204);
-    res.end();
-  }
-  else {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('API Todos - Routes: GET/POST /api/todos, GET/PUT/DELETE /api/todos/:id');
-  }
-});
-
-server.listen(3000, () => console.log('http://localhost:3000'));
-```
-
-</details>
+`Date.parse` sur une HTTP-date GMT est fiable ; on tronque à la seconde des deux côtés pour coller à la précision réelle de `Last-Modified`.
 
 ---
 
-## Navigation
+## 4. Pièges & misconceptions
 
-| Précédent | Suivant |
-|:---------:|:-------:|
-| [Module 04 — Cache-Control](./04-cache-control.md) | [Module 06 — Stale-While-Revalidate & Stratégies de cache](./06-stale-while-revalidate.md) |
+### PIÈGE #1 — Croire que le 304 économise le round-trip
+
+```
+Faux : "304 = pas de requête réseau"
+Vrai : 304 = requête réseau BEL ET BIEN envoyée, mais réponse SANS corps.
+```
+
+Le `304` économise le transfert du **corps**, pas l'aller-retour. Pour supprimer aussi le round-trip, il faut de la **fraîcheur** (`max-age` non expiré) : tant que la copie est fraîche, le client la sert sans réseau. ETag et `max-age` couvrent donc deux moments différents (stale vs fresh) — d'où l'intérêt de les combiner (§2.8).
+
+### PIÈGE #2 — Oublier les guillemets ou croire fort/faible interchangeables partout
+
+```
+❌ ETag: abc123           <- invalide : les guillemets font partie de la syntaxe
+✅ ETag: "abc123"
+```
+
+Un ETag **faible** (`W/"…"`) empêche la mise en cache des requêtes `Range` (MDN) : la spec exige un ETag **fort** pour garantir que les octets partiels correspondent. Pour la revalidation simple d'un JSON d'API, fort comme faible conviennent — mais dès que du `Range` entre en jeu (vidéo, gros fichiers), il faut du fort.
+
+### PIÈGE #3 — Ignorer la comparaison faible de If-None-Match
+
+`If-None-Match` compare avec le **weak comparison algorithm** (MDN). Concrètement : `"abc"` et `W/"abc"` **matchent** pour une revalidation. Ne code pas une égalité stricte de chaîne qui distinguerait `"abc"` de `W/"abc"` — tu renverrais un `200` inutile là où un `304` était attendu.
+
+### PIÈGE #4 — Renvoyer un corps avec un 304
+
+```
+❌ res.writeHead(304, {...}); res.end(JSON.stringify(data));  // corps sur un 304
+✅ res.writeHead(304, {...}); res.end();                       // AUCUN corps
+```
+
+Un `304` **ne doit jamais** avoir de corps — c'est toute sa raison d'être. Il porte seulement les en-têtes qu'un `200` aurait renvoyés (`ETag`, `Cache-Control`, `Date`, `Vary`…). Un corps sur un `304` viole la spec et certains clients l'ignoreront ou planteront.
+
+### PIÈGE #5 — Croire que `no-cache` désactive le cache
+
+```
+no-cache  = "cache autorisé, mais REVALIDE avant chaque usage" (souvent -> 304)
+no-store  = "ne stocke rien du tout" (ça, c'est la vraie désactivation)
+```
+
+`no-cache` + ETag est une excellente combinaison pour du contenu qui doit toujours être à jour mais change rarement : on paie un `304` léger, pas un `200` complet.
+
+### PIÈGE #6 — Laisser If-Modified-Since décider quand un ETag est présent
+
+Si tu évalues `If-Modified-Since` **avant** `If-None-Match`, tu inverses la précédence de la spec. MDN : `If-None-Match` a la précédence ; `If-Modified-Since` est **ignoré** quand l'ETag est géré. Évalue toujours l'ETag d'abord ; la date n'est qu'un filet pour les clients sans ETag.
+
+### PIÈGE #7 — `Last-Modified` comme validateur principal
+
+La précision à la seconde et la sensibilité au `touch` en font un mauvais validateur primaire. Utilise l'ETag en premier, `Last-Modified` seulement en fallback complémentaire (et rappelle-toi : `If-Modified-Since` ne marche qu'avec `GET`/`HEAD`).
 
 ---
 
-<!-- parcours-recommande -->
+## 5. Ancrage TribuZen
 
-::: tip Parcours recommandé
-1. **Screencast** : [screencast 05 etag](../screencasts/screencast-05-etag.md)
-2. **Lab** : [lab-04-etag-conditional](../labs/lab-04-etag-conditional/README)
-3. **Visualisation** : [Cache Decision Tree](../visualizations/cache-decision-tree.html)
-4. **Visualisation** : [Stale-While-Revalidate](../visualizations/stale-while-revalidate.html)
-5. **Quiz** : [quiz 05 etag](../quizzes/quiz-05-etag.html)
-:::
+Usage direct dans le produit : la **liste des membres** d'une famille.
+
+**Lecture — 304 sur la liste des membres.** L'endpoint `GET /api/families/:id/members` renvoie un ETag (hash du JSON) **et** un `Last-Modified`. L'app mobile rafraîchit toutes les 30 s ; comme la liste change rarement, la quasi-totalité des rafraîchissements repartent en `304 Not Modified` sans corps. On combine `Cache-Control: max-age=30` (fraîcheur, zéro réseau les 30 premières secondes) et l'ETag (revalidation bon marché ensuite). Le client renvoie automatiquement l'ETag stocké en `If-None-Match` à chaque refresh.
+
+Concrètement, sur un forfait mobile : au lieu de ~8 Ko toutes les 30 s, on transfère un `304` de quelques dizaines d'octets tant que personne n'ajoute ou ne retire de membre. Le jour où un parent invite un nouveau membre, la ressource change → nouvel ETag → le prochain refresh repart en `200` avec la liste à jour, puis re-cale sur des `304`.
+
+Le validateur `Last-Modified` reste posé en fallback pour les vieux proxys d'entreprise (réseau d'une école, d'un club sportif) qui n'enverraient pas l'`If-None-Match` mais gèrent l'`If-Modified-Since`.
+
+Fichiers cibles dans `smaurier/tribuzen` :
+```
+tribuzen/src/server/
+  lib/
+    etag.ts                 # strongEtag(body) + versionEtag(row)
+  routes/
+    families.members.ts     # GET liste -> ETag + Last-Modified + 304
+```
+
+---
+
+## 6. Points clés
+
+1. Revalider une copie stale, c'est demander « encore bonne ? » sans re-télécharger le corps ; deux issues : `304` (inchangé) ou `200` (nouveau contenu).
+2. Le `304 Not Modified` économise le **corps**, pas le round-trip ; supprimer le round-trip relève de la fraîcheur (`max-age`), pas de l'ETag.
+3. Un ETag est une chaîne opaque **entre guillemets** ; **fort** = identité octet par octet (requis pour cacher du `Range`), **faible** `W/"…"` = équivalence sémantique (suffit pour la revalidation).
+4. On génère un ETag par **hash de contenu** (précision parfaite, coûte du CPU) ou par **version applicative** (gratuit, exige un champ version discipliné).
+5. `If-None-Match` déclenche la revalidation en lecture ; sa comparaison est **faible** (`"abc"` matche `W/"abc"`) et le `304` ne renvoie **aucun corps**, seulement les en-têtes d'un `200`.
+6. `Last-Modified`/`If-Modified-Since` (GET/HEAD seulement) est un fallback à précision limitée (seconde, `touch`, horloges) ; l'ETag est prioritaire.
+7. Quand les deux sont envoyés, **`If-None-Match` a la précédence** et `If-Modified-Since` est ignoré — évalue toujours l'ETag d'abord.
+8. `Cache-Control` (combien de temps sans check) et ETag (quoi faire une fois stale) sont complémentaires ; `no-cache` = revalider, pas désactiver (c'est `no-store`).
+
+---
+
+## 7. Seeds Anki
+
+```
+Qu'économise exactement une réponse 304 Not Modified ?|Le corps (body) de la réponse, pas le round-trip. La requête réseau est bien envoyée ; seul le transfert des octets du contenu est évité (souvent 95-99% de la réponse).
+Différence entre ETag fort et ETag faible (W/) ?|Fort ("abc") = identité octet par octet, permet de cacher les requêtes Range. Faible (W/"abc") = équivalence sémantique, empêche le cache des requêtes Range mais suffit pour la revalidation classique.
+Deux stratégies pour générer un ETag et leur compromis ?|Hash de contenu : précision parfaite mais coûte du CPU à chaque réponse. Version applicative (updatedAt/version en base) : gratuit à calculer mais exige d'incrémenter la version à chaque écriture.
+À quoi sert If-None-Match et que renvoie le serveur si l'ETag correspond ?|C'est la revalidation en lecture : le client renvoie l'ETag qu'il détient. Si l'ETag correspond encore (comparaison faible), le serveur répond 304 Not Modified sans corps ; sinon 200 avec le nouveau contenu.
+Quels en-têtes un 304 doit-il renvoyer, et lesquels sont interdits ?|Un 304 ne porte AUCUN corps. Il renvoie les en-têtes qu'un 200 aurait envoyés : Cache-Control, Content-Location, Date, ETag, Expires, Vary. Pas de corps ni de Content-Length du corps.
+Que se passe-t-il si une requête envoie à la fois If-None-Match et If-Modified-Since ?|If-None-Match a la précédence : le serveur évalue l'ETag et IGNORE If-Modified-Since. La date ne sert de fallback que si le serveur ne gère pas l'ETag.
+Pourquoi Last-Modified est-il un mauvais validateur principal ?|Précision à la seconde (deux modifs dans la même seconde indistinguables), sensible au touch (date change sans changement de contenu), incohérent avec des horloges désynchronisées, et limité à GET/HEAD. On l'utilise en fallback, l'ETag est prioritaire.
+no-cache désactive-t-il le cache ?|Non : no-cache = "cache autorisé mais revalide avant chaque usage" (donne souvent des 304). no-store = ne rien stocker du tout. Combiné à un ETag, no-cache garantit du contenu à jour au prix d'un simple 304.
+Comment Cache-Control et ETag se combinent-ils ?|Cache-Control décide combien de temps servir sans check (fraîcheur/max-age) ; l'ETag décide quoi faire une fois stale (revalider à moindre coût via 304). Complémentaires : max-age couvre le fresh, l'ETag couvre le stale.
+```
+
+---
+
+## Pont vers le lab
+
+> Lab associé : `11-http-caching/labs/lab-05-etag-validation-conditionnelle/README.md`. Construire un serveur Express qui émet un ETag, répond `304` sur `If-None-Match` (liste des membres inchangée), pose `Last-Modified` en fallback, et observer les statuts réels au `curl` et dans l'onglet Network des DevTools.

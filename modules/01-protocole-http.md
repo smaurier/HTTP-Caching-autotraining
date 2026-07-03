@@ -1,1019 +1,435 @@
-# Module 01 — Le protocole HTTP en profondeur
-
-> **Objectif** : Maîtriser l'anatomie des requêtes et réponses HTTP, connaître les méthodes et status codes, et comprendre les connexions HTTP/1.1.
-> **Difficulte** : ⭐ (Débutant)
-
+---
+titre: Le protocole HTTP
+cours: 11-http-caching
+notions: [anatomie requête/réponse, start-line et headers et body, méthodes HTTP, safe et idempotent, sémantique REST des méthodes, codes de statut 1xx-5xx, négociation de contenu, HTTP sur TCP/TLS, keep-alive, cookies et sessions]
+outcomes: [lire et forger une requête/réponse HTTP brute, choisir la bonne méthode selon safe/idempotent, renvoyer le bon code de statut pour chaque situation]
+prerequis: [00-prerequis-et-vue-ensemble]
+next: 02-http2-http3
+libs: []
+tribuzen: inspection des requêtes de l'API TribuZen — méthodes, codes de statut, en-têtes sur invitations et assets
+last-reviewed: 2026-07
 ---
 
-## 1. Anatomie d'une requête HTTP
+# Le protocole HTTP
 
-### 1.1 L'analogie du bon de commande
+> **Outcomes — tu sauras FAIRE :** lire et forger une requête/réponse HTTP brute, choisir la bonne méthode selon safe/idempotent, renvoyer le code de statut correct pour chaque situation.
+> **Difficulté :** :star:
 
-Une requête HTTP, c'est comme un bon de commande dans un restaurant :
+## 1. Cas concret d'abord
 
-```
-+-----------------------------------------------+
-|              BON DE COMMANDE                   |
-+-----------------------------------------------+
-| Action : COMMANDER (GET)                       |  <-- Methode
-| Table  : /menu/plat-du-jour                    |  <-- URL / chemin
-| Salle  : restaurant-dupont.fr                  |  <-- Host
-+-----------------------------------------------+
-| Instructions speciales :                       |  <-- Headers
-|   - Vegetarien : oui                           |
-|   - Allergie : gluten                          |
-|   - Langue : francais                          |
-+-----------------------------------------------+
-| Details supplementaires :                      |  <-- Body
-|   { "cuisson": "a point",                      |
-|     "accompagnement": "frites" }               |
-+-----------------------------------------------+
-```
+Tu débogues l'API TribuZen. Un membre se plaint : « quand je clique deux fois sur *Inviter* Bob dans ma famille, parfois ça marche, parfois j'ai une erreur rouge. » Tu ouvres l'onglet **Network** de DevTools et tu captures les deux appels bruts.
 
-### 1.2 Structure formelle d'une requête
-
-Une requête HTTP se compose de trois parties :
-
-```
-POST /api/users HTTP/1.1                    <-- Ligne de requete
-Host: api.example.com                       <-- \
-Content-Type: application/json              <--  | Headers
-Accept: application/json                    <--  |
-Authorization: Bearer eyJhbGc...            <--  |
-Content-Length: 52                           <-- /
-                                            <-- Ligne vide (separateur)
-{"name": "Alice", "email": "a@test.com"}   <-- Body (optionnel)
-```
-
-**Decomposition de la ligne de requête :**
-
-```
-POST          /api/users       HTTP/1.1
-^^^^          ^^^^^^^^^^       ^^^^^^^^
-Methode       Chemin (URI)     Version du protocole
-
-- Methode   : Quelle action effectuer ?
-- Chemin    : Sur quelle ressource ?
-- Version   : Quelle version de HTTP ?
-```
-
-### 1.3 Voir une requête avec Node.js
-
-```typescript
-// inspect-request.ts
-// Ce serveur affiche tous les details de chaque requete recue
-
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  // --- LIGNE DE REQUETE ---
-  console.log('=== NOUVELLE REQUETE ===');
-  console.log(`Methode  : ${req.method}`);       // GET, POST, etc.
-  console.log(`URL      : ${req.url}`);           // /api/users?page=1
-  console.log(`Version  : HTTP/${req.httpVersion}`); // 1.1
-
-  // --- HEADERS ---
-  console.log('\n--- Headers ---');
-  for (const [key, value] of Object.entries(req.headers)) {
-    console.log(`  ${key}: ${value}`);
-  }
-
-  // --- BODY ---
-  let body: string = '';
-  req.on('data', (chunk: Buffer) => {       // Les donnees arrivent par morceaux
-    body += chunk.toString();               // On les concatene
-  });
-  req.on('end', () => {             // Quand tout est recu
-    if (body) {
-      console.log(`\n--- Body ---\n  ${body}`);
-    } else {
-      console.log('\n--- Body ---\n  (vide)');
-    }
-    console.log('========================\n');
-
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Requete recue ! Regarde la console du serveur.');
-  });
-});
-
-server.listen(3000, () => {
-  console.log('Serveur pret sur http://localhost:3000');
-  console.log('Envoie des requetes avec curl pour les inspecter.\n');
-});
-```
-
-**Tester avec curl :**
-
-```bash
-# GET simple
-curl http://localhost:3000/api/users
-
-# POST avec un body JSON
-curl -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Alice","email":"a@test.com"}' \
-  http://localhost:3000/api/users
-
-# PUT avec des headers personnalises
-curl -X PUT \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer mon-token-secret" \
-  -d '{"name":"Alice Updated"}' \
-  http://localhost:3000/api/users/42
-```
-
----
-
-## 2. Anatomie d'une réponse HTTP
-
-### 2.1 L'analogie du colis de retour
-
-La réponse HTTP, c'est comme le colis que tu recois après ta commande :
-
-```
-+-----------------------------------------------+
-|         COLIS DE RETOUR (REPONSE)              |
-+-----------------------------------------------+
-| Statut : Commande livree (200 OK)              |  <-- Status line
-+-----------------------------------------------+
-| Etiquettes sur le colis :                      |  <-- Headers
-|   - Contenu : Texte HTML                       |
-|   - Poids : 4521 octets                        |
-|   - Date d'emballage : 7 mars 2026             |
-|   - Valable jusqu'au : 14 mars 2026            |
-|   - Empreinte unique : "v2-abc123"             |
-+-----------------------------------------------+
-| Contenu du colis :                             |  <-- Body
-|   <!DOCTYPE html>                              |
-|   <html>                                       |
-|   <head><title>Ma page</title></head>          |
-|   <body><h1>Bonjour !</h1></body>              |
-|   </html>                                      |
-+-----------------------------------------------+
-```
-
-### 2.2 Structure formelle d'une réponse
-
-```
-HTTP/1.1 200 OK                             <-- Ligne de statut
-Date: Sat, 07 Mar 2026 10:30:00 GMT         <-- \
-Content-Type: text/html; charset=utf-8      <--  |
-Content-Length: 4521                         <--  | Headers
-Cache-Control: max-age=3600                 <--  |
-ETag: "v2-abc123"                           <--  |
-Server: nginx/1.24.0                        <-- /
-                                            <-- Ligne vide
-<!DOCTYPE html>                             <-- \
-<html>                                      <--  | Body
-<head><title>Ma page</title></head>         <--  |
-<body><h1>Bonjour !</h1></body>             <--  |
-</html>                                     <-- /
-```
-
-**Decomposition de la ligne de statut :**
-
-```
-HTTP/1.1      200        OK
-^^^^^^^^      ^^^        ^^
-Version       Code       Phrase descriptive
-              numerique  (pour les humains)
-```
-
-### 2.3 Construire une réponse avec Node.js
-
-```typescript
-// response-builder.ts
-// Differentes facons de construire une reponse HTTP
-
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-
-  if (req.url === '/html') {
-    // --- Reponse HTML ---
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'max-age=60',
-    });
-    res.end('<h1>Page HTML</h1><p>Ceci est du HTML.</p>');
-
-  } else if (req.url === '/json') {
-    // --- Reponse JSON ---
-    const data: { message: string; timestamp: number } = { message: 'Bonjour', timestamp: Date.now() };
-    const json: string = JSON.stringify(data);
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(json),    // Taille en octets
-      'Cache-Control': 'no-store',                  // Ne PAS cacher
-    });
-    res.end(json);
-
-  } else if (req.url === '/redirect') {
-    // --- Redirection ---
-    res.writeHead(301, {
-      'Location': '/html',    // Ou aller
-    });
-    res.end();                // Pas de body necessaire
-
-  } else if (req.url === '/not-found') {
-    // --- Erreur 404 ---
-    res.writeHead(404, {
-      'Content-Type': 'text/plain',
-    });
-    res.end('Ressource introuvable');
-
-  } else {
-    // --- Page d'accueil ---
-    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('Essaie /html, /json, /redirect ou /not-found');
-  }
-});
-
-server.listen(3000, () => console.log('http://localhost:3000'));
-```
-
----
-
-## 3. Les méthodes HTTP
-
-### 3.1 Vue d'ensemble
-
-Les méthodes HTTP definissent **l'action** a effectuer sur la ressource. C'est comme les différents types de demandes que tu peux faire au guichet de la poste.
-
-| Méthode     | Action                   | Analogie postale                     | Body requête | Body réponse | Idempotent | Safe |
-|-------------|--------------------------|--------------------------------------|:------------:|:------------:|:----------:|:----:|
-| **GET**     | Lire une ressource       | Demander un document                 | Non          | Oui          | Oui        | Oui  |
-| **POST**    | Créer une ressource      | Envoyer un nouveau colis             | Oui          | Oui          | Non        | Non  |
-| **PUT**     | Remplacer une ressource  | Remplacer le contenu d'une boite     | Oui          | Optionnel    | Oui        | Non  |
-| **PATCH**   | Modifier partiellement   | Corriger une adresse sur un colis    | Oui          | Oui          | Non        | Non  |
-| **DELETE**  | Supprimer une ressource  | Demander la destruction d'un courrier| Optionnel    | Optionnel    | Oui        | Non  |
-| **HEAD**    | Lire les headers seuls   | Demander le poids du colis sans l'ouvrir | Non      | Non          | Oui        | Oui  |
-| **OPTIONS** | Connaître les possibilites| Demander la liste des services dispo | Non          | Oui          | Oui        | Oui  |
-
-**Deux propriétés importantes :**
-
-- **Idempotent** : Faire la même requête 1 fois ou 10 fois produit le même résultat. `DELETE /user/42` supprime l'utilisateur 42. L'appeler 10 fois ne supprime toujours que l'utilisateur 42.
-- **Safe (sure)** : La requête ne modifie rien sur le serveur. `GET` ne fait que lire.
-
-**Pourquoi c'est important pour le cache ?** Seules les méthodes **safe** (GET, HEAD) sont généralement cachees. On ne met jamais en cache un POST car il créé quelque chose de nouveau à chaque appel.
-
-### 3.2 GET — La méthode la plus courante
-
-```
-GET /api/articles/42 HTTP/1.1
-Host: blog.example.com
-Accept: application/json
-```
-
-- Recupere une ressource sans la modifier
-- Pas de body dans la requête
-- C'est la méthode par defaut du navigateur quand tu tapes une URL
-- **C'est la principale méthode concernee par le cache HTTP**
-
-```typescript
-// Cote serveur Node.js
-if (req.method === 'GET' && req.url === '/api/articles/42') {
-  const article: { id: number; title: string; content: string } = { id: 42, title: 'Mon article', content: '...' };
-  res.writeHead(200, {
-    'Content-Type': 'application/json',
-    'Cache-Control': 'max-age=300',   // Cacher 5 minutes
-    'ETag': '"article-42-v3"',        // Version 3 de l'article
-  });
-  res.end(JSON.stringify(article));
-}
-```
-
-### 3.3 POST — Créer quelque chose
-
-```
-POST /api/articles HTTP/1.1
-Host: blog.example.com
+```http
+POST /api/families/42/invitations HTTP/1.1
+Host: api.tribuzen.app
 Content-Type: application/json
-Content-Length: 45
+Authorization: Bearer eyJhbGc...
 
-{"title": "Nouvel article", "content": "..."}
+{"email":"bob@example.com"}
 ```
 
-- Cree une nouvelle ressource
-- Le body contient les donnees a créer
-- **Non idempotent** : deux POST identiques creent deux articles différents
-- **Jamais mis en cache** par defaut
+Première réponse :
 
-### 3.4 PUT vs PATCH
-
-```
-# PUT : remplace TOUTE la ressource
-PUT /api/articles/42 HTTP/1.1
+```http
+HTTP/1.1 201 Created
+Location: /api/families/42/invitations/i-8f3a
 Content-Type: application/json
 
-{"title": "Titre modifie", "content": "Nouveau contenu complet", "author": "Alice"}
+{"id":"i-8f3a","email":"bob@example.com","status":"pending"}
+```
 
-# PATCH : modifie PARTIELLEMENT la ressource
-PATCH /api/articles/42 HTTP/1.1
+Deuxième réponse (même clic, 2 secondes plus tard) :
+
+```http
+HTTP/1.1 409 Conflict
 Content-Type: application/json
 
-{"title": "Juste le titre modifie"}
+{"error":"invitation_already_exists","email":"bob@example.com"}
 ```
 
-**Analogie** : PUT, c'est comme remplacer tout le contenu d'une boite aux lettres par un nouveau contenu. PATCH, c'est comme corriger juste l'adresse sur l'enveloppe.
+**Trois questions que ce module va rendre évidentes :**
+1. Pourquoi le premier appel renvoie **201** et pas **200** ? (une ressource a été *créée*)
+2. Pourquoi le deuxième renvoie **409** et pas **400** ou **500** ? (conflit avec l'état actuel, ce n'est ni la faute du format ni celle du serveur)
+3. Est-ce un bug ? Non — c'est le comportement **correct** d'un `POST`, qui n'est **pas idempotent**. Deux `POST` identiques peuvent produire deux effets différents. Comprendre `safe` et `idempotent` t'explique pourquoi le front doit désactiver le bouton après le premier envoi.
 
-### 3.5 HEAD — Utile pour le cache
-
-```bash
-# HEAD renvoie les memes headers que GET, mais SANS le body
-curl -I https://example.com/gros-fichier.zip
-
-# Resultat :
-# HTTP/2 200
-# content-length: 524288000     <-- 500 Mo !
-# last-modified: Mon, 01 Jan 2026 00:00:00 GMT
-# etag: "abc123"
-```
-
-**Pourquoi HEAD est utile ?** Avant de telecharger un fichier de 500 Mo, tu peux vérifier avec HEAD si ta copie en cache est encore valide. Si le ETag n'a pas change, inutile de re-telecharger.
-
-### 3.6 OPTIONS — Utilise pour CORS
-
-```
-OPTIONS /api/data HTTP/1.1
-Host: api.example.com
-Origin: https://mon-site.com
-Access-Control-Request-Method: POST
+Pour lire, forger et diagnostiquer ces échanges, il faut connaître l'anatomie d'une requête, les méthodes et surtout les codes de statut. On y va.
 
 ---
 
-HTTP/1.1 204 No Content
-Access-Control-Allow-Origin: https://mon-site.com
-Access-Control-Allow-Methods: GET, POST, PUT, DELETE
-Access-Control-Max-Age: 86400      <-- Cacher cette reponse 24h
+## 2. Théorie complète, concise
+
+### 2.1 Anatomie d'une requête
+
+Une requête HTTP est du **texte** structuré en trois parties : une *start-line*, des *headers*, une ligne vide, puis un *body* optionnel.
+
+```http
+POST /api/families/42/invitations HTTP/1.1   ← start-line (méthode + cible + version)
+Host: api.tribuzen.app                        ← header
+Content-Type: application/json                ← header
+Content-Length: 27                            ← header
+                                              ← ligne vide (CRLF) = fin des headers
+{"email":"bob@example.com"}                   ← body (optionnel)
 ```
 
-**Pourquoi ?** Avant d'envoyer une requête cross-origin "complexe", le navigateur envoie automatiquement un OPTIONS (appele "preflight") pour vérifier les permissions. Le header `Access-Control-Max-Age` permet de **cacher** cette réponse pour éviter de refaire le preflight.
+- **start-line** = `MÉTHODE cible-de-requête version`. La cible est le plus souvent un chemin d'origine (`/api/...?query`).
+- **headers** = paires `Nom: valeur`, insensibles à la casse pour le nom. `Host` est **obligatoire** en HTTP/1.1.
+- **body** = données envoyées (JSON, formulaire, fichier). Absent pour un `GET` classique.
 
----
+### 2.2 Anatomie d'une réponse
 
-## 4. Les status codes
+Même structure, mais la première ligne est une *status-line*.
 
-### 4.1 L'analogie du feu tricolore
-
-Les status codes sont comme des feux de signalisation :
-
+```http
+HTTP/1.1 201 Created                          ← status-line (version + code + raison)
+Date: Thu, 03 Jul 2026 10:30:00 GMT           ← header
+Content-Type: application/json                ← header
+Location: /api/families/42/invitations/i-8f3a ← header
+Content-Length: 58                            ← header
+                                              ← ligne vide
+{"id":"i-8f3a","email":"bob@example.com","status":"pending"}   ← body
 ```
-1xx (Informatif)    : Feu ORANGE clignotant  - "Attends, je traite..."
-2xx (Succes)        : Feu VERT              - "Tout va bien !"
-3xx (Redirection)   : PANNEAU DEVIATION     - "Va voir ailleurs"
-4xx (Erreur client) : Feu ROUGE             - "C'est ta faute"
-5xx (Erreur serveur): PANNE DE FEU          - "C'est ma faute"
+
+La **raison textuelle** (`Created`, `Not Found`) est purement humaine : le client se fie au **code numérique**, jamais au texte.
+
+### 2.3 Les méthodes HTTP
+
+La méthode décrit l'**intention** sur la ressource. Deux propriétés les classent :
+
+- **Safe (sûre)** : n'entraîne aucune modification côté serveur. Purement de la lecture.
+- **Idempotent** : appeler N fois produit le **même état final** qu'un seul appel. (L'idempotence porte sur l'*état du serveur*, pas sur le corps renvoyé.)
+
+| Méthode  | Rôle                        | Safe | Idempotent | Body requête |
+|----------|-----------------------------|:----:|:----------:|:------------:|
+| GET      | Lire une ressource          | oui  | oui        | non          |
+| HEAD     | Lire les headers seuls      | oui  | oui        | non          |
+| OPTIONS  | Lister les capacités        | oui  | oui        | non          |
+| POST     | Créer / action non répétable| non  | **non**    | oui          |
+| PUT      | Remplacer intégralement     | non  | **oui**    | oui          |
+| PATCH    | Modifier partiellement      | non  | **non**    | oui          |
+| DELETE   | Supprimer                   | non  | **oui**    | optionnel    |
+
+**Toute méthode safe est idempotente** (lire ne change rien, donc lire N fois non plus). L'inverse est faux : `DELETE` et `PUT` sont idempotents mais pas safe.
+
+Le point qui piège le plus :
+- `PUT /invitations/i-8f3a` avec le même corps → appelé 10 fois, la ressource finit dans le même état. **Idempotent.**
+- `POST /invitations` → appelé 10 fois, crée potentiellement 10 invitations (ou 1 + neuf 409). **Non idempotent.**
+- `PATCH` est **non idempotent** dans le cas général : un patch de type `{"score": "+1"}` (incrément relatif) donne un résultat différent à chaque appel. Un patch de champs absolus peut l'être en pratique, mais la spec ne le garantit pas.
+
+Pourquoi ça compte concrètement : un client (ou un proxy) a le droit de **rejouer** automatiquement une requête idempotente après un timeout réseau. Rejouer un `POST` créerait un doublon — c'est exactement le bug du cas concret.
+
+### 2.4 Sémantique REST des méthodes
+
+Sur une ressource collection `/api/families/42/members` et une ressource unitaire `/api/families/42/members/7` :
+
+```http
+GET    /members        → 200 + liste
+POST   /members        → 201 + Location du nouveau membre (créer)
+GET    /members/7      → 200 + le membre 7
+PUT    /members/7      → 200/204 remplace TOUT le membre 7
+PATCH  /members/7      → 200 modifie CERTAINS champs du membre 7
+DELETE /members/7      → 204 supprime le membre 7
 ```
 
-### 4.2 Les 1xx — Informatifs
+Règle mnémotechnique : `POST` sur la **collection** pour créer, `PUT`/`PATCH`/`DELETE` sur l'**élément** pour agir dessus.
 
-| Code | Nom                  | Usage                                        |
-|------|----------------------|----------------------------------------------|
-| 100  | Continue             | "Continue a envoyer le body"                 |
-| 101  | Switching Protocols  | "On passe en WebSocket"                      |
-| 103  | Early Hints          | "Voici des headers en avance (preload)"      |
+### 2.5 Les codes de statut
 
-Les 1xx sont rares mais `103 Early Hints` est interessant pour la performance :
+Cinq classes, reconnaissables au premier chiffre :
 
+| Classe | Sens              | Analogie                     |
+|--------|-------------------|------------------------------|
+| 1xx    | Information        | « je traite, attends »       |
+| 2xx    | Succès             | « c'est fait »               |
+| 3xx    | Redirection        | « va voir ailleurs »         |
+| 4xx    | Erreur **client**  | « ta requête est fautive »   |
+| 5xx    | Erreur **serveur** | « ma faute, réessaie »       |
+
+Les incontournables à connaître par cœur :
+
+```text
+2xx  200 OK              réussi, voici le corps
+     201 Created         créé — accompagne d'un header Location
+     204 No Content      réussi, aucun corps (typique DELETE, PUT)
+
+3xx  301 Moved Permanently  déplacé pour toujours (méthode peut passer à GET)
+     302 Found              déplacé temporairement (méthode peut passer à GET)
+     304 Not Modified       ta copie en cache est encore bonne (LE code du cache)
+     307 Temporary Redirect temporaire, méthode + body CONSERVÉS
+     308 Permanent Redirect permanent, méthode + body CONSERVÉS
+
+4xx  400 Bad Request        syntaxe / format invalide
+     401 Unauthorized       non authentifié (« qui es-tu ? »)
+     403 Forbidden          authentifié mais pas le droit (« je sais qui tu es, non »)
+     404 Not Found          ressource inexistante
+     405 Method Not Allowed méthode connue mais interdite ici — accompagne d'un header Allow
+     409 Conflict           conflit avec l'état actuel (doublon, version périmée)
+     410 Gone               a existé, supprimé définitivement
+     422 Unprocessable      syntaxe OK mais sémantique invalide (validation métier)
+     429 Too Many Requests  rate limiting — voir header Retry-After
+
+5xx  500 Internal Server Error  bug non géré côté serveur
+     502 Bad Gateway           un proxy a reçu une réponse invalide en amont
+     503 Service Unavailable   serveur temporairement down (maintenance, surcharge)
 ```
-HTTP/1.1 103 Early Hints
-Link: </style.css>; rel=preload; as=style
-Link: </app.js>; rel=preload; as=script
 
---- (le serveur continue a traiter) ---
+Discriminations qui font la différence en entretien :
+- **301 vs 308** : les deux sont permanents, mais `301` autorise le client à retomber en `GET`, `308` **préserve** la méthode et le corps (un `POST` reste un `POST`).
+- **400 vs 422** : `400` = *je ne comprends pas* le format (JSON cassé). `422` = *je comprends mais je refuse* (email valide syntaxiquement mais déjà pris → souvent `409`/`422`).
+- **401 vs 403** : `401` = authentification manquante/invalide. `403` = authentifié, mais droits insuffisants.
+- **404 vs 410** : `404` = « pas trouvé, peut-être plus tard ». `410` = « supprimé, ne redemande pas ».
 
+### 2.6 Négociation de contenu
+
+Le client dit ce qu'il **accepte**, le serveur annonce ce qu'il **envoie**.
+
+```http
+GET /api/families/42 HTTP/1.1
+Accept: application/json              ← je veux du JSON
+Accept-Language: fr-FR, fr;q=0.9      ← de préférence en français (q = pondération)
+Accept-Encoding: gzip, br             ← compression acceptée
+```
+
+```http
 HTTP/1.1 200 OK
-Content-Type: text/html
-...
+Content-Type: application/json; charset=utf-8   ← voici du JSON UTF-8
+Content-Language: fr-FR
+Content-Encoding: br                            ← compressé en Brotli
+Vary: Accept-Encoding                           ← le cache doit varier selon cet en-tête
 ```
 
-### 4.3 Les 2xx — Succes
+`Content-Type` sur la **requête** décrit le body envoyé ; `Accept` décrit ce qu'on veut en retour. Deux en-têtes différents qu'on confond souvent.
 
-| Code | Nom                  | Usage                                        |
-|------|----------------------|----------------------------------------------|
-| 200  | OK                   | Requête reussie, voici la réponse            |
-| 201  | Created              | Ressource créée avec succes (POST)           |
-| 204  | No Content           | Reussi, mais pas de body a renvoyer          |
+### 2.7 HTTP sur TCP/TLS et connexions (survol)
 
-```typescript
-// Exemples de reponses 2xx en Node.js
+HTTP est un protocole **applicatif** qui circule au-dessus de **TCP** (fiabilité, ordre). En HTTPS, une couche **TLS** s'intercale pour chiffrer : `HTTP → TLS → TCP → IP`.
 
-// 200 OK — Reponse standard
-if (req.method === 'GET') {
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ data: 'voici les donnees' }));
-}
+- **HTTP/1.0** : une connexion TCP par requête → un handshake (≈ 1 aller-retour) gaspillé à chaque fichier.
+- **HTTP/1.1** : connexions **persistantes** (`keep-alive`) par défaut — on réutilise la même connexion TCP pour plusieurs échanges séquentiels.
 
-// 201 Created — Apres creation d'une ressource
-if (req.method === 'POST') {
-  const newUser: { id: number; name: string } = { id: 99, name: 'Alice' };
-  res.writeHead(201, {
-    'Content-Type': 'application/json',
-    'Location': '/api/users/99',     // URL de la nouvelle ressource
-  });
-  res.end(JSON.stringify(newUser));
-}
-
-// 204 No Content — Suppression reussie
-if (req.method === 'DELETE') {
-  res.writeHead(204);
-  res.end();    // Pas de body
-}
+```http
+Connection: keep-alive    ← implicite en HTTP/1.1, réutilise la connexion
+Connection: close         ← ferme après cette réponse
 ```
 
-### 4.4 Les 3xx — Redirections (très importants pour le cache)
+Limites de HTTP/1.1 (head-of-line blocking, plafond de ~6 connexions par domaine) et leurs solutions → **module 02** (HTTP/2 & HTTP/3).
 
-| Code | Nom                  | Permanente ? | Méthode conservee ? | Cachable ?       |
-|------|----------------------|:------------:|:-------------------:|:----------------:|
-| 301  | Moved Permanently    | Oui          | Peut changer (-> GET)| Oui par defaut  |
-| 302  | Found                | Non          | Peut changer (-> GET)| Non par defaut  |
-| 304  | Not Modified         | -            | -                    | Special (cache) |
-| 307  | Temporary Redirect   | Non          | Oui, conservee       | Non par defaut  |
-| 308  | Permanent Redirect   | Oui          | Oui, conservee       | Oui par defaut  |
+### 2.8 Cookies et sessions (survol)
 
-**Le 304 Not Modified est LE status code du cache :**
+HTTP est **sans état** : chaque requête est indépendante. Les cookies rétablissent une continuité. Le serveur pose un cookie, le navigateur le renvoie automatiquement.
 
-```
-CLIENT                                    SERVEUR
-  |                                          |
-  |  GET /page.html                          |
-  |  If-None-Match: "v5"                     |
-  |  ---------------------------------------->
-  |                                          |
-  |  Le serveur verifie :                    |
-  |  ETag actuel = "v5" ?                    |
-  |  OUI -> rien n'a change !                |
-  |                                          |
-  |  HTTP/1.1 304 Not Modified               |
-  |  ETag: "v5"                              |
-  |  Cache-Control: max-age=3600             |
-  |  (PAS DE BODY ! Economie de bande passante)
-  |  <----------------------------------------
-  |                                          |
-  |  Le navigateur utilise sa copie locale   |
+```http
+HTTP/1.1 200 OK
+Set-Cookie: sid=abc123; HttpOnly; Secure; SameSite=Lax; Max-Age=3600
 ```
 
-**Pourquoi 304 est genial ?** La réponse fait typiquement **~200 octets** au lieu de potentiellement **des megaoctets**. On economise de la bande passante ET du temps.
+```http
+GET /api/families/42 HTTP/1.1
+Cookie: sid=abc123        ← renvoyé automatiquement par le navigateur
+```
 
-```typescript
-// Serveur qui repond 304 quand rien n'a change
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+- `HttpOnly` : inaccessible en JS (anti-XSS). `Secure` : HTTPS uniquement. `SameSite` : anti-CSRF.
+- Le `sid` référence une **session** côté serveur. L'authentification par en-tête `Authorization: Bearer <token>` (JWT) est l'alternative sans cookie, courante pour les API. Détails d'auth → cours dédié.
 
-const CURRENT_ETAG: string = '"page-v5"';
-const PAGE_CONTENT: string = '<html><body><h1>Contenu de la page</h1></body></html>';
+---
 
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  // Verifier si le client a deja la bonne version
-  const clientETag: string | undefined = req.headers['if-none-match'];
+## 3. Worked examples
 
-  if (clientETag === CURRENT_ETAG) {
-    // Le client a deja la bonne version !
-    console.log('304 - Le client a deja la derniere version');
-    res.writeHead(304, {
-      'ETag': CURRENT_ETAG,
-      'Cache-Control': 'max-age=60',
+### Exemple 1 — Diagnostiquer le 409 sur l'invitation en double (TribuZen)
+
+Reprise du cas concret, résolu de bout en bout côté serveur.
+
+```ts
+// invitations.route.ts — un handler minimal Node.js illustrant les BONS codes
+import http from 'node:http';
+
+interface Invitation { id: string; email: string; status: 'pending' | 'accepted'; }
+
+// « Base » en mémoire : email déjà invité pour la famille 42
+const invitations: Invitation[] = [];
+
+const server = http.createServer((req, res) => {
+  const json = (code: number, body: unknown, headers: Record<string, string> = {}) => {
+    res.writeHead(code, { 'Content-Type': 'application/json', ...headers });
+    res.end(JSON.stringify(body));
+  };
+
+  if (req.method === 'POST' && req.url === '/api/families/42/invitations') {
+    let raw = '';
+    req.on('data', (c) => (raw += c));
+    req.on('end', () => {
+      // 1. Le corps est-il un JSON lisible ? Sinon 400 (format).
+      let payload: { email?: string };
+      try { payload = JSON.parse(raw); }
+      catch { return json(400, { error: 'invalid_json' }); }
+
+      // 2. Le champ métier est-il présent/valide ? Sinon 422 (sémantique).
+      if (!payload.email || !payload.email.includes('@')) {
+        return json(422, { error: 'email_invalid' });
+      }
+
+      // 3. Existe-t-il déjà ? Alors 409 : conflit avec l'état actuel.
+      //    Ni 400 (le format est bon), ni 500 (le serveur va très bien).
+      if (invitations.some((i) => i.email === payload.email)) {
+        return json(409, { error: 'invitation_already_exists', email: payload.email });
+      }
+
+      // 4. Création réussie → 201 + Location de la nouvelle ressource.
+      const inv: Invitation = { id: 'i-8f3a', email: payload.email!, status: 'pending' };
+      invitations.push(inv);
+      return json(201, inv, { Location: `/api/families/42/invitations/${inv.id}` });
     });
-    res.end();   // Pas de body ! Enormes economies.
     return;
   }
 
-  // Premiere visite ou version obsolete
-  console.log('200 - Envoi du contenu complet');
-  res.writeHead(200, {
-    'Content-Type': 'text/html',
-    'ETag': CURRENT_ETAG,
-    'Cache-Control': 'max-age=60',
-  });
-  res.end(PAGE_CONTENT);
+  // Méthode non prévue sur cette route connue → 405 + Allow.
+  if (req.url === '/api/families/42/invitations') {
+    return json(405, { error: 'method_not_allowed' }, { Allow: 'POST' });
+  }
+
+  return json(404, { error: 'not_found' }); // route inconnue
 });
 
 server.listen(3000);
 ```
 
-### 4.5 Les 4xx — Erreurs client
+Le raisonnement à retenir : **on choisit le code le plus précis**. Le premier `POST` → `201`. Le second `POST` identique → `409`, car `POST` n'est pas idempotent et le serveur détecte le doublon. Un `400` serait faux (le JSON est valide), un `500` serait faux (aucun bug serveur).
 
-| Code | Nom                  | Signification                                |
-|------|----------------------|----------------------------------------------|
-| 400  | Bad Request          | Requête mal formee                           |
-| 401  | Unauthorized         | Authentification requise                     |
-| 403  | Forbidden            | Authentifie mais pas autorise                |
-| 404  | Not Found            | Ressource introuvable                        |
-| 405  | Method Not Allowed   | Méthode HTTP non permise                     |
-| 409  | Conflict             | Conflit avec l'état actuel                   |
-| 429  | Too Many Requests    | Rate limiting                                |
+Côté front, la conséquence directe : puisque le rejeu d'un `POST` crée un doublon, on **désactive le bouton** après le premier clic (ou on passe par un `PUT` idempotent avec une clé d'idempotence si l'API le supporte).
 
-**Pourquoi ?** La distinction entre 401 et 403 est importante : 401 signifie "qui es-tu ?", 403 signifie "je sais qui tu es, mais tu n'as pas le droit".
+### Exemple 2 — Forger et lire des requêtes avec curl
 
-**Les erreurs 4xx et le cache :** Les réponses 404 peuvent etre cachees ! Si un fichier n'existe pas, le cache peut retenir cette information pour éviter de redemander.
-
-### 4.6 Les 5xx — Erreurs serveur
-
-| Code | Nom                   | Signification                               |
-|------|-----------------------|---------------------------------------------|
-| 500  | Internal Server Error | Erreur non prevue sur le serveur            |
-| 502  | Bad Gateway           | Le proxy a recu une réponse invalide        |
-| 503  | Service Unavailable   | Serveur temporairement indisponible         |
-| 504  | Gateway Timeout       | Le proxy n'a pas recu de réponse a temps    |
-
-**Et le cache ?** En cas de 5xx, un cache intelligent peut servir une copie **stale** (perimee) plutot qu'afficher l'erreur. C'est la directive `stale-while-error` de Cache-Control (on le verra au Module 04).
-
----
-
-## 5. Les connexions HTTP/1.1
-
-### 5.1 Le problème des connexions courtes (HTTP/1.0)
-
-En HTTP/1.0, chaque requête ouvrait une nouvelle connexion TCP :
-
-```
-HTTP/1.0 — UNE CONNEXION PAR REQUETE
-======================================
-
-Requete 1 (page.html) :
-  [TCP handshake] --> [Requete] --> [Reponse] --> [Fermeture TCP]
-
-Requete 2 (style.css) :
-  [TCP handshake] --> [Requete] --> [Reponse] --> [Fermeture TCP]
-
-Requete 3 (script.js) :
-  [TCP handshake] --> [Requete] --> [Reponse] --> [Fermeture TCP]
-
-Requete 4 (image.png) :
-  [TCP handshake] --> [Requete] --> [Reponse] --> [Fermeture TCP]
-
-Chaque handshake TCP prend ~1 RTT (aller-retour).
-4 requetes = 4 handshakes = 4 RTT gaspilles !
-```
-
-**Analogie** : C'est comme raccrocher le telephone après chaque phrase et devoir rappeler pour dire la phrase suivante.
-
-### 5.2 Keep-Alive (HTTP/1.1)
-
-HTTP/1.1 introduit les connexions persistantes par defaut :
-
-```
-HTTP/1.1 — CONNEXION PERSISTANTE (Keep-Alive)
-===============================================
-
-[TCP handshake] --> [Requete 1] --> [Reponse 1]
-                    [Requete 2] --> [Reponse 2]
-                    [Requete 3] --> [Reponse 3]
-                    [Requete 4] --> [Reponse 4]
-                --> [Fermeture TCP]
-
-1 seul handshake pour 4 requetes = 3 RTT economises !
-```
-
-```
-# Le header Connection: keep-alive est IMPLICITE en HTTP/1.1
-# Pour fermer explicitement :
-Connection: close
-```
-
-### 5.3 Pipelining HTTP/1.1
-
-Le pipelining permet d'envoyer plusieurs requêtes **sans attendre** les réponses :
-
-```
-SANS PIPELINING (sequentiel)          AVEC PIPELINING
-================================      ================================
-
-Client    Serveur                     Client    Serveur
-  |  Req 1  ->  |                       |  Req 1  ->  |
-  |  <- Resp 1  |                       |  Req 2  ->  |
-  |  Req 2  ->  |                       |  Req 3  ->  |
-  |  <- Resp 2  |                       |  <- Resp 1  |
-  |  Req 3  ->  |                       |  <- Resp 2  |
-  |  <- Resp 3  |                       |  <- Resp 3  |
-  |             |                       |             |
-
-Temps: 6 etapes                       Temps: 4 etapes (mais...)
-```
-
-**Le problème du Head-of-Line (HoL) blocking :**
-
-```
-PIPELINING AVEC HOL BLOCKING
-==============================
-
-Client envoie : Req1 (petite), Req2 (petite), Req3 (petite)
-
-Serveur traite :
-  Req1 : [==========]  (LENT ! 2 secondes)
-  Req2 :              [=]  (rapide, 50ms)
-  Req3 :                [=]  (rapide, 50ms)
-
-Les reponses DOIVENT revenir dans L'ORDRE.
-Req2 et Req3 sont bloquees par Req1, meme si elles sont pretes !
-
-C'est comme une file d'attente au supermarche : si le premier
-client met 10 minutes, tout le monde attend.
-```
-
-**Pourquoi c'est un problème ?** En pratique, le pipelining HTTP/1.1 est désactivé dans la plupart des navigateurs a cause du HoL blocking. La solution viendra avec HTTP/2 (Module 02).
-
-### 5.4 La limite des 6 connexions
-
-Les navigateurs limitent le nombre de connexions simultanees par domaine :
-
-```
-NAVIGATEUR                              SERVEUR (example.com)
-                                        Port 443
-  Connexion 1 : [==================]
-  Connexion 2 : [==================]
-  Connexion 3 : [==================]
-  Connexion 4 : [==================]
-  Connexion 5 : [==================]
-  Connexion 6 : [==================]
-  ------------ MAXIMUM ATTEINT ---------
-  Requete 7   : [EN ATTENTE........]   <-- Bloquee !
-  Requete 8   : [EN ATTENTE........]   <-- Bloquee !
-```
-
-**Pourquoi cette limite ?** Pour ne pas surcharger le serveur. Mais ça créé un goulot d'etranglement : une page avec 50 ressources doit les telecharger par lots de 6.
-
-**L'astuce historique du "domain sharding" :**
-
-```
-<!-- Repartir les ressources sur plusieurs domaines -->
-<img src="https://img1.example.com/photo1.jpg">
-<img src="https://img2.example.com/photo2.jpg">
-<img src="https://img3.example.com/photo3.jpg">
-
-<!-- 6 connexions par domaine x 3 domaines = 18 connexions ! -->
-```
-
-**Note** : Cette astuce est obsolete avec HTTP/2. Ne l'utilisez plus.
-
-### 5.5 Résumé des limitations HTTP/1.1
-
-```
-+--------------------------------------------------+
-|           LIMITATIONS DE HTTP/1.1                 |
-+--------------------------------------------------+
-| 1. Head-of-Line blocking (pipelining inutilisable)|
-| 2. Maximum 6 connexions par domaine               |
-| 3. Headers textuels redondants a chaque requete   |
-| 4. Pas de prioritisation des requetes              |
-| 5. Le serveur ne peut pas "pousser" du contenu    |
-+--------------------------------------------------+
-|                                                    |
-|  --> HTTP/2 et HTTP/3 resolvent ces problemes      |
-|      (voir Module 02)                              |
-+--------------------------------------------------+
-```
-
----
-
-## 6. HTTP en pratique : un serveur complet
-
-### 6.1 Mini-API avec routing et status codes
-
-```typescript
-// mini-api.ts
-// Une API HTTP complete avec gestion des methodes et status codes
-
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-
-interface Article {
-  id: number;
-  title: string;
-  content: string;
-}
-
-// Base de donnees en memoire
-const articles: Article[] = [
-  { id: 1, title: 'Premier article', content: 'Contenu du premier article' },
-  { id: 2, title: 'Deuxieme article', content: 'Contenu du deuxieme article' },
-];
-let nextId: number = 3;
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  const { method, url } = req;
-
-  // --- Parser l'URL ---
-  const urlParts: string[] = (url ?? '').split('/').filter(Boolean);  // ['api', 'articles', '42']
-  const isArticlesRoute: boolean = urlParts[0] === 'api' && urlParts[1] === 'articles';
-  const articleId: number | null = urlParts[2] ? parseInt(urlParts[2]) : null;
-
-  // Header commun pour JSON
-  const jsonHeaders = { 'Content-Type': 'application/json; charset=utf-8' };
-
-  // --- GET /api/articles ---
-  if (method === 'GET' && isArticlesRoute && !articleId) {
-    res.writeHead(200, {
-      ...jsonHeaders,
-      'Cache-Control': 'max-age=10',         // Cacher la liste 10s
-    });
-    res.end(JSON.stringify(articles));
-    return;
-  }
-
-  // --- GET /api/articles/:id ---
-  if (method === 'GET' && isArticlesRoute && articleId) {
-    const article: Article | undefined = articles.find(a => a.id === articleId);
-    if (!article) {
-      res.writeHead(404, jsonHeaders);        // 404 : pas trouve
-      res.end(JSON.stringify({ error: 'Article introuvable' }));
-      return;
-    }
-    res.writeHead(200, {
-      ...jsonHeaders,
-      'Cache-Control': 'max-age=60',         // Cacher l'article 60s
-      'ETag': `"article-${article.id}-v1"`,  // Empreinte de version
-    });
-    res.end(JSON.stringify(article));
-    return;
-  }
-
-  // --- POST /api/articles ---
-  if (method === 'POST' && isArticlesRoute) {
-    let body: string = '';
-    req.on('data', (chunk: Buffer) => body += chunk);
-    req.on('end', () => {
-      try {
-        const data: { title?: string; content?: string } = JSON.parse(body);
-        if (!data.title) {
-          res.writeHead(400, jsonHeaders);    // 400 : requete invalide
-          res.end(JSON.stringify({ error: 'Le titre est requis' }));
-          return;
-        }
-        const newArticle: Article = { id: nextId++, title: data.title, content: data.content || '' };
-        articles.push(newArticle);
-        res.writeHead(201, {                  // 201 : cree avec succes
-          ...jsonHeaders,
-          'Location': `/api/articles/${newArticle.id}`,
-        });
-        res.end(JSON.stringify(newArticle));
-      } catch (e) {
-        res.writeHead(400, jsonHeaders);
-        res.end(JSON.stringify({ error: 'JSON invalide' }));
-      }
-    });
-    return;
-  }
-
-  // --- DELETE /api/articles/:id ---
-  if (method === 'DELETE' && isArticlesRoute && articleId) {
-    const index: number = articles.findIndex(a => a.id === articleId);
-    if (index === -1) {
-      res.writeHead(404, jsonHeaders);
-      res.end(JSON.stringify({ error: 'Article introuvable' }));
-      return;
-    }
-    articles.splice(index, 1);
-    res.writeHead(204);                       // 204 : supprime, pas de body
-    res.end();
-    return;
-  }
-
-  // --- Methode non autorisee ---
-  if (isArticlesRoute) {
-    res.writeHead(405, {                      // 405 : methode non permise
-      ...jsonHeaders,
-      'Allow': 'GET, POST, DELETE',           // Methodes autorisees
-    });
-    res.end(JSON.stringify({ error: 'Methode non autorisee' }));
-    return;
-  }
-
-  // --- Route inconnue ---
-  res.writeHead(404, jsonHeaders);
-  res.end(JSON.stringify({ error: 'Route inconnue' }));
-});
-
-server.listen(3000, () => {
-  console.log('Mini API sur http://localhost:3000');
-  console.log('Essaie :');
-  console.log('  curl http://localhost:3000/api/articles');
-  console.log('  curl http://localhost:3000/api/articles/1');
-  console.log('  curl -X POST -H "Content-Type: application/json" -d \'{"title":"Nouveau"}\' http://localhost:3000/api/articles');
-  console.log('  curl -X DELETE http://localhost:3000/api/articles/1');
-});
-```
-
----
-
-## Points clés
-
-1. **Une requête HTTP** a trois parties : ligne de requête (méthode + URL + version), headers, et body optionnel.
-2. **Une réponse HTTP** a trois parties : ligne de statut (version + code + phrase), headers, et body.
-3. **Les méthodes** definissent l'action : GET (lire), POST (créer), PUT (remplacer), PATCH (modifier), DELETE (supprimer).
-4. **Les status codes** communiquent le résultat : 2xx (succes), 3xx (redirection), 4xx (erreur client), 5xx (erreur serveur).
-5. **304 Not Modified** est le status code clé du caching : il permet au serveur de dire "ta copie est encore bonne" sans renvoyer le contenu.
-6. **HTTP/1.1** utilise keep-alive par defaut mais souffre du Head-of-Line blocking et de la limite de 6 connexions par domaine.
-
----
-
-## Lab associe
-
--> `labs/01-construire-une-api-http.md` — Créer une API REST complete avec Node.js et observer les headers
-
----
-
-## Pour aller plus loin
-
-- [MDN — Méthodes HTTP](https://developer.mozilla.org/fr/docs/Web/HTTP/Methods)
-- [MDN — Codes de réponse HTTP](https://developer.mozilla.org/fr/docs/Web/HTTP/Status)
-- [RFC 9110 — HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110)
-- [HTTP Status Dogs](https://httpstatusdogs.com/) — Pour retenir les codes avec humour
-
----
-
-## Si tu es perdu
-
-**Retiens juste trois choses :**
-
-1. Le client envoie une **requête** avec une méthode (GET = "donne-moi", POST = "créé ça") vers une URL.
-2. Le serveur renvoie une **réponse** avec un code (200 = "OK", 404 = "pas trouve", 304 = "rien n'a change").
-3. HTTP/1.1 reutilise les connexions (keep-alive) mais ne peut envoyer qu'une requête à la fois par connexion.
-
-Le reste, ce sont des details qu'on approfondira au fil des modules.
-
----
-
-## Exercice pratique — Chrome DevTools
-
-### Objectif
-
-Inspecter les headers de requête et de réponse HTTP dans Chrome DevTools, identifier les status codes, et observer le comportement de keep-alive.
-
-### Etapes
-
-1. **Lancer le serveur de demonstration**
-   - Ouvre un terminal et lance le serveur `response-builder.js` (section 2.3 de ce module) :
-   ```bash
-   node response-builder.js
-   ```
-   - Le serveur ecoute sur `http://localhost:3000`
-
-2. **Ouvrir DevTools et naviguer**
-   - Ouvre Chrome et va sur `http://localhost:3000/html`
-   - Ouvre DevTools (`F12`) > onglet **Network**
-   - Recharge la page (`F5`) pour capturer la requête
-
-3. **Inspecter les headers de requête**
-   - Clique sur la requête `html` dans la liste
-   - Dans le panneau **Headers**, repere la section **Request Headers** :
-     - `Host: localhost:3000` — adresse du serveur
-     - `Accept: text/html,...` — types de contenu acceptes par le navigateur
-     - `Connection: keep-alive` — le navigateur demandé une connexion persistante
-     - `User-Agent: ...` — identification du navigateur
-
-4. **Inspecter les headers de réponse**
-   - Toujours dans le panneau **Headers**, repere la section **Response Headers** :
-     - `Content-Type: text/html; charset=utf-8` — type de la réponse
-     - `Cache-Control: max-age=60` — directive de cache
-     - `Connection: keep-alive` — le serveur confirme la connexion persistante
-   - Observe le **Status Code** affiche en haut : `200 OK`
-
-5. **Observer différents status codes**
-   - Dans la barre d'adresse, navigue vers les différentes routes et observe le status code dans DevTools :
-     - `http://localhost:3000/html` --> `200 OK`
-     - `http://localhost:3000/json` --> `200 OK` (observe le header `Cache-Control: no-store`)
-     - `http://localhost:3000/redirect` --> `301 Moved Permanently` (observe le header `Location: /html`)
-     - `http://localhost:3000/not-found` --> `404 Not Found`
-   - Pour voir la redirection 301 clairement, coche **Preserve log** dans DevTools avant de naviguer vers `/redirect`
-
-6. **Observer le keep-alive**
-   - Navigue vers `http://localhost:3000/html` puis immediatement vers `http://localhost:3000/json`
-   - Dans l'onglet Network, clique sur une requête et ouvre l'onglet **Timing**
-   - Observe le champ **Connection Start** :
-     - Pour la première requête : tu verras le temps de connexion TCP (quelques ms)
-     - Pour les requêtes suivantes : le temps de connexion sera `0 ms` car la connexion TCP est **reutilisee** (keep-alive)
-
-7. **Utiliser le filtre par status code**
-   - Dans le champ de filtre en haut de l'onglet Network, tape `status-code:301` pour ne voir que les redirections
-   - Essaie `status-code:200` pour ne voir que les succes
-   - Essaie `status-code:404` pour ne voir que les erreurs 404
-
-### Ce que tu devrais observer
-
-```
-/html      : Status 200 | Cache-Control: max-age=60   | Connection: keep-alive
-/json      : Status 200 | Cache-Control: no-store      | Content-Type: application/json
-/redirect  : Status 301 | Location: /html              | (pas de body)
-/not-found : Status 404 | Content-Type: text/plain      | "Ressource introuvable"
-
-Onglet Timing (2eme requete) :
-  Connection Start : 0 ms  --> keep-alive reutilise la connexion existante
-```
-
-### Questions de reflexion
-
-- Quelle est la différence entre les headers `Cache-Control: max-age=60` et `Cache-Control: no-store` que tu as observes ?
-- Pourquoi la requête vers `/redirect` est-elle suivie automatiquement d'une requête vers `/html` ?
-- Comment le keep-alive ameliore-t-il les performances quand tu navigues entre plusieurs pages du même serveur ?
-
----
-
-## Defi
-
-### Construis un serveur qui renvoie le bon status code
-
-**Objectif** : Créer un serveur Node.js qui repond avec le status code correct selon la situation.
-
-**Cahier des charges :**
-
-1. `GET /` -> `200 OK` avec un message de bienvenue
-2. `GET /secret` sans header `Authorization` -> `401 Unauthorized`
-3. `GET /secret` avec `Authorization: Bearer admin` -> `200 OK` avec le contenu secret
-4. `GET /secret` avec un autre token -> `403 Forbidden`
-5. `POST /data` avec un body JSON valide -> `201 Created`
-6. `POST /data` sans body ou JSON invalide -> `400 Bad Request`
-7. `GET /old-page` -> `301 Moved Permanently` vers `/new-page`
-8. `GET /new-page` -> `200 OK` avec le nouveau contenu
-9. Toute autre URL -> `404 Not Found`
-
-**Teste avec curl :**
+Objectif : produire chaque méthode à la main et lire la status-line.
 
 ```bash
-curl -v http://localhost:3000/
-curl -v http://localhost:3000/secret
-curl -v -H "Authorization: Bearer admin" http://localhost:3000/secret
-curl -v -H "Authorization: Bearer wrong" http://localhost:3000/secret
-curl -v -X POST -H "Content-Type: application/json" -d '{"key":"value"}' http://localhost:3000/data
-curl -v -X POST http://localhost:3000/data
-curl -v -L http://localhost:3000/old-page
-curl -v http://localhost:3000/nexiste-pas
+# GET — lecture, safe. -i affiche les headers de réponse.
+curl -i https://api.tribuzen.app/api/families/42
+
+# HEAD — mêmes headers que GET, AUCUN body. Idéal pour tester l'existence/la taille.
+curl -I https://api.tribuzen.app/api/families/42
+
+# POST — création. -d implique Content-Type: application/x-www-form-urlencoded,
+# donc on force le JSON explicitement.
+curl -i -X POST https://api.tribuzen.app/api/families/42/invitations \
+  -H "Content-Type: application/json" \
+  -d '{"email":"bob@example.com"}'
+
+# PUT — remplacement idempotent : relancer cette commande 10x donne le même état.
+curl -i -X PUT https://api.tribuzen.app/api/families/42/members/7 \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Bob","role":"member"}'
+
+# DELETE — attend typiquement un 204 (pas de body).
+curl -i -X DELETE https://api.tribuzen.app/api/families/42/members/7
+
+# -v montre TOUT l'échange : lignes préfixées > (envoyé) et < (reçu).
+curl -v https://api.tribuzen.app/api/families/42
 ```
 
-<details>
-<summary>Solution</summary>
+Lecture d'une sortie `-v` typique :
 
-```typescript
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  const { method, url } = req;
-
-  if (method === 'GET' && url === '/') {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bienvenue sur le serveur !');
-  }
-  else if (method === 'GET' && url === '/secret') {
-    const auth: string | undefined = req.headers['authorization'];
-    if (!auth) {
-      res.writeHead(401, { 'WWW-Authenticate': 'Bearer' });
-      res.end('Authentification requise');
-    } else if (auth === 'Bearer admin') {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end('Voici le contenu secret !');
-    } else {
-      res.writeHead(403);
-      res.end('Acces refuse');
-    }
-  }
-  else if (method === 'POST' && url === '/data') {
-    let body: string = '';
-    req.on('data', (c: Buffer) => body += c);
-    req.on('end', () => {
-      try {
-        if (!body) throw new Error('Body vide');
-        JSON.parse(body);
-        res.writeHead(201, { 'Content-Type': 'text/plain' });
-        res.end('Donnees creees');
-      } catch {
-        res.writeHead(400, { 'Content-Type': 'text/plain' });
-        res.end('Requete invalide');
-      }
-    });
-  }
-  else if (method === 'GET' && url === '/old-page') {
-    res.writeHead(301, { 'Location': '/new-page' });
-    res.end();
-  }
-  else if (method === 'GET' && url === '/new-page') {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bienvenue sur la nouvelle page !');
-  }
-  else {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Page introuvable');
-  }
-});
-
-server.listen(3000, () => console.log('http://localhost:3000'));
+```text
+> GET /api/families/42 HTTP/2       ← ce que curl ENVOIE (start-line + headers)
+> host: api.tribuzen.app
+> accept: */*
+>
+< HTTP/2 200                        ← ce que le serveur RENVOIE (status-line)
+< content-type: application/json
+< cache-control: max-age=60
+< etag: "fam-42-v3"
+<
+{"id":42,"name":"Les Dupont"}       ← body
 ```
 
-</details>
+Le `<` te donne immédiatement le code (`200`) et les en-têtes de cache (`etag`, `cache-control`) qu'on exploitera dès le module 05.
 
 ---
 
-## Navigation
+## 4. Pièges & misconceptions
 
-| Précédent | Suivant |
-|:---------:|:-------:|
-| [Module 00 — Prérequis & Vue d'ensemble](./00-prerequis-et-vue-ensemble.md) | [Module 02 — HTTP/2 & HTTP/3](./02-http2-http3.md) |
+### PIÈGE #1 — Croire que `200` convient partout
+
+`200 OK` est un réflexe paresseux. Une création réussie mérite `201` (+ `Location`), une suppression sans corps mérite `204`. Renvoyer `200` sur un `POST` de création prive le client du `Location` de la nouvelle ressource et brouille la sémantique. **Le code de statut fait partie du contrat de l'API.**
+
+### PIÈGE #2 — Confondre « idempotent » et « safe »
+
+```text
+❌ « DELETE est safe puisqu'on peut le rappeler sans risque »
+✅ DELETE est IDEMPOTENT (l'état final est le même), mais PAS safe (il MODIFIE).
+```
+
+Safe = *ne change rien* (GET, HEAD, OPTIONS). Idempotent = *le rejouer ne change pas l'état final au-delà du premier appel* (GET, HEAD, OPTIONS, **PUT, DELETE**). `POST` et `PATCH` ne sont ni l'un garanti : un rejeu réseau peut créer un doublon.
+
+### PIÈGE #3 — Mettre un `200` avec `{"error": ...}` dans le body
+
+```text
+❌ HTTP/1.1 200 OK
+   {"success": false, "error": "not_found"}
+✅ HTTP/1.1 404 Not Found
+   {"error": "not_found"}
+```
+
+Renvoyer `200` sur une erreur casse tout : les caches, les clients HTTP, le monitoring et les retries se fient au **code**, pas au JSON. Une erreur = un code 4xx/5xx.
+
+### PIÈGE #4 — Confondre `Content-Type` (requête) et `Accept`
+
+`Content-Type` décrit le **body que tu envoies**. `Accept` décrit le format que tu **veux recevoir**. Mettre `Accept: application/json` sur un `POST` ne dit rien sur le corps envoyé — il faut `Content-Type: application/json` pour ça. Symétriquement, un serveur qui lit `Accept` pour parser le body se trompe d'en-tête.
+
+### PIÈGE #5 — Croire que `304 Not Modified` est une erreur
+
+`304` est dans la classe 3xx mais c'est un **succès de cache** : « ta copie locale est bonne, je ne renvoie pas le corps ». Le navigateur affiche alors sa version en cache. C'est une optimisation, pas un échec — approfondi au module 05.
+
+### PIÈGE #6 — Oublier le header `Host`
+
+En HTTP/1.1, `Host` est **obligatoire** : un même serveur (une même IP) héberge souvent plusieurs domaines (virtual hosting). Sans `Host`, le serveur ne sait pas quel site tu veux → `400 Bad Request`.
 
 ---
 
-<!-- parcours-recommande -->
+## 5. Ancrage TribuZen
 
-::: tip Parcours recommandé
-1. **Screencast** : [screencast 01 http protocol](../screencasts/screencast-01-http-protocol.md)
-2. **Lab** : [lab-01-http-inspector](../labs/lab-01-http-inspector/README)
-3. **Visualisation** : [HTTP Lifecycle](../visualizations/http-lifecycle.html)
-4. **Quiz** : [quiz 01 http protocol](../quizzes/quiz-01-http-protocol.html)
-:::
+L'API TribuZen est une API REST/JSON classique. Ce module est le **socle** : tout le cours HTTP & Caching s'appuie sur ces échanges bruts.
+
+**Invitations (`POST /api/families/:id/invitations`)** — le cas concret. Première invitation → `201 Created` + `Location`. Doublon → `409 Conflict`. Email malformé → `422`. Ces codes sont ce que le front lit pour afficher le bon message et désactiver le bouton (rejeu interdit car `POST` non idempotent).
+
+**Assets statiques (`GET /assets/logo-v3.png`)** — les images et bundles du front TribuZen. Au deuxième chargement, le navigateur envoie `If-None-Match: "logo-v3"` et reçoit `304 Not Modified` sans body : la bande passante est économisée. C'est le pont direct vers le module 05 (ETag & validation conditionnelle).
+
+**Mise à jour de profil (`PUT /api/members/:id`)** — remplacement **idempotent** : un double-clic ou un rejeu réseau n'a aucune conséquence, l'état final est identique. À opposer au `POST` d'invitation.
+
+**Suppression (`DELETE /api/families/:id/members/:mid`)** — répond `204 No Content`. Rappeler le `DELETE` sur un membre déjà retiré peut répondre `404` ou `204` selon la convention — dans les deux cas l'état final est stable (idempotent).
+
+Quand tu inspecteras ces requêtes dans DevTools Network (lab), tu retrouveras exactement la structure start-line / headers / body de la section 2, et tu sauras nommer chaque code.
+
+---
+
+## 6. Points clés
+
+1. Une requête = start-line (`MÉTHODE cible version`) + headers + ligne vide + body optionnel ; une réponse = status-line (`version code raison`) + headers + body.
+2. **Safe** = ne modifie rien (GET, HEAD, OPTIONS). **Idempotent** = rejouer ne change pas l'état final (GET, HEAD, OPTIONS, PUT, DELETE). `POST` et `PATCH` ne sont pas idempotents.
+3. Toute méthode safe est idempotente ; l'inverse est faux (PUT/DELETE sont idempotents mais pas safe).
+4. Le code de statut fait partie du contrat : `201`+`Location` pour créer, `204` pour supprimer sans corps, jamais `200` avec un body d'erreur.
+5. Les codes à maîtriser : 200/201/204 · 301/302/304/307/308 · 400/401/403/404/405/409/410/422/429 · 500/502/503.
+6. Discriminer : 301 vs 308 (méthode conservée ?), 400 vs 422 (format vs sémantique), 401 vs 403 (authentifié ?), 404 vs 410 (peut-être vs jamais).
+7. `Content-Type` décrit le body envoyé ; `Accept` décrit le format voulu en retour (négociation de contenu).
+8. HTTP circule sur TCP (+ TLS en HTTPS) ; HTTP/1.1 réutilise la connexion via `keep-alive`. Cookies (`Set-Cookie`/`Cookie`) rétablissent l'état sur un protocole sans état.
+
+---
+
+## 7. Seeds Anki
+
+```
+Quelles sont les trois parties d'une requête HTTP ?|La start-line (méthode + cible + version), les headers (paires Nom: valeur), et un body optionnel séparé des headers par une ligne vide.
+Différence entre une méthode safe et une méthode idempotente ?|Safe = ne modifie rien côté serveur (GET, HEAD, OPTIONS). Idempotent = rejouer N fois donne le même état final qu'un seul appel (GET, HEAD, OPTIONS, PUT, DELETE). Toute méthode safe est idempotente ; l'inverse est faux.
+POST et PATCH sont-ils idempotents ?|Non. Deux POST identiques peuvent créer deux ressources ; un PATCH relatif (ex: +1) change l'état à chaque appel. Conséquence : un client/proxy ne doit pas rejouer automatiquement un POST après un timeout.
+Quel code renvoyer après une création réussie, et quel header l'accompagne ?|201 Created, accompagné d'un header Location pointant vers l'URL de la ressource créée.
+Quel code pour une invitation en double dans TribuZen, et pourquoi pas 400 ni 500 ?|409 Conflict : conflit avec l'état actuel. Pas 400 (le format JSON est valide), pas 500 (aucun bug serveur).
+Différence entre 401 et 403 ?|401 Unauthorized = non authentifié (« qui es-tu ? »). 403 Forbidden = authentifié mais droits insuffisants (« je sais qui tu es, tu n'as pas le droit »).
+Différence entre 301 et 308 ?|Les deux sont des redirections permanentes. 301 autorise le client à repasser en GET ; 308 conserve la méthode et le corps d'origine (un POST reste un POST).
+Différence entre les en-têtes Content-Type et Accept ?|Content-Type décrit le format du body envoyé dans le message courant ; Accept (requête) indique le format que le client souhaite recevoir en réponse (négociation de contenu).
+Que signifie 304 Not Modified et pourquoi ce n'est pas une erreur ?|C'est un succès de cache : la copie locale du client est encore valide, le serveur ne renvoie pas le body. Le navigateur affiche sa version en cache — économie de bande passante.
+Pourquoi le header Host est-il obligatoire en HTTP/1.1 ?|Une même IP héberge souvent plusieurs domaines (virtual hosting). Host indique quel site est visé ; sans lui le serveur répond 400 Bad Request.
+```
+
+---
+
+## Pont vers le lab
+
+> Lab associé : `11-http-caching/labs/lab-01-protocole-http/README.md`. Inspecter des requêtes réelles avec `curl -v` et DevTools Network, forger chaque méthode, lire les codes de statut et diagnostiquer un `409` et un `304` sur l'API TribuZen.

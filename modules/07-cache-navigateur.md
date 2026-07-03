@@ -1,880 +1,435 @@
-# Module 07 — Cache navigateur
+---
+titre: Le cache du navigateur
+cours: 11-http-caching
+notions: [memory cache vs disk cache, from memory cache vs from disk cache dans DevTools, cache HTTP du navigateur vs Cache API du Service Worker, heuristique de fraicheur, "Storage (localStorage sessionStorage IndexedDB)", Back-Forward Cache (bfcache), partition du cache double-key par site, "DevTools Application Storage et purge", cache et navigation reload vs lien vs back]
+outcomes:
+  - sait distinguer memory cache et disk cache dans DevTools Network
+  - sait choisir entre cache HTTP, Cache API et Storage pour un besoin donné
+  - sait diagnostiquer et purger un asset qui ne se met pas à jour
+  - sait raisonner sur l'heuristique de fraîcheur et le partitionnement du cache par site
+prerequis: [00-prerequis-et-vue-ensemble, 01-protocole-http, 02-http2-http3, 03-en-tetes-http, 04-cache-control, 05-etag-validation-conditionnelle, 06-stale-while-revalidate]
+next: 08-cdn
+libs: []
+tribuzen: comportement du cache navigateur sur l'admin TribuZen — assets from disk cache, bfcache sur navigation back, debug et purge d'un asset périmé
+last-reviewed: 2026-07
+---
 
-> **Objectif** : Comprendre les différentes couches de cache dans un navigateur, maîtriser la Service Worker Cache API et les mécanismes de preloading pour optimiser les performances cote client.
-> **Difficulte** : :star::star::star:
+# Le cache du navigateur
+
+> **Outcomes — tu sauras FAIRE :** distinguer memory cache et disk cache dans DevTools Network, choisir entre cache HTTP, Cache API et Storage pour un besoin donné, diagnostiquer et purger un asset qui ne se met pas à jour, raisonner sur l'heuristique de fraîcheur et le partitionnement du cache par site.
+> **Difficulté :** :star::star::star:
+>
+> **Portée :** ce module reste **côté navigateur** : les deux niveaux physiques du cache HTTP (memory / disk), l'heuristique de fraîcheur, le bfcache, le partitionnement, les outils de purge dans DevTools. La **Cache API** (le cache programmable d'un Service Worker) est seulement **introduite** ici pour la distinguer du cache HTTP — ses stratégies (cache-first, network-first, offline) et son code sont le sujet du **module 15 (PWA / Service Workers)**.
+
+## 1. Cas concret d'abord
+
+Tu déploies une correction de style sur l'admin TribuZen. Le CSS a changé côté serveur, mais un collègue râle : chez lui, la sidebar est toujours cassée. Toi, sur ta machine, tu vois la version corrigée. Vous êtes sur la même URL.
+
+Tu ouvres son DevTools > Network et tu vois ça :
+
+```
+Name                Status   Type    Size
+main.css            200      css     (from disk cache)
+app.js              200      js      (from memory cache)
+logo.svg            200      svg     (from memory cache)
+GET /admin          200      doc     4.2 kB
+```
+
+Le `main.css` est servi `(from disk cache)` — le navigateur n'est jamais allé chercher la nouvelle version sur le serveur. Il répond à partir d'une copie stockée sur le disque, parce que la réponse d'origine disait `Cache-Control: max-age=86400` et que la journée n'est pas écoulée.
+
+**Trois questions que ce module va trancher :**
+1. Pourquoi `main.css` est `(from disk cache)` mais `app.js` est `(from memory cache)` sur la même page ?
+2. Pourquoi un simple `F5` ne suffit pas à récupérer le nouveau CSS, alors que `Ctrl+Shift+R` oui ?
+3. Comment purger proprement chez le collègue, puis éviter durablement le problème (indice : le nommage des assets, pas la durée de cache) ?
+
+Le cache navigateur n'est pas une boîte noire : il a des niveaux, des règles de fraîcheur, et des outils de debug et de purge précis.
 
 ---
 
-## 1. Les 4 couches de cache du navigateur
+## 2. Théorie complète, concise
 
-### 1.1 Vue d'ensemble
+### 2.1 « Le cache du navigateur » n'est pas une seule chose
 
-Quand le navigateur a besoin d'une ressource, il parcourt **4 couches** avant d'aller sur le réseau :
+Quand une page a besoin d'une ressource déjà vue, le navigateur regarde plusieurs stockages **côté client** avant d'aller sur le réseau. Ce module couvre les caches **liés au HTTP** et les distingue des mécanismes applicatifs :
 
-```
-Requete du navigateur
-        |
-        v
-+------------------+
-| 1. Memory Cache  |  <-- RAM, ultra-rapide, volatil
-+------------------+
-        | MISS
-        v
-+------------------+
-| 2. Service Worker|  <-- Code JS que tu controles
-+------------------+
-        | MISS
-        v
-+------------------+
-| 3. Disk Cache    |  <-- Disque dur, persistant
-+------------------+
-        | MISS
-        v
-+------------------+
-| 4. Network       |  <-- Requete HTTP au serveur
-+------------------+
-```
+| Stockage | Contenu | Piloté par | Portée |
+|---|---|---|---|
+| Memory cache | ressources de la page courante | le navigateur (opaque) | l'onglet, éphémère |
+| Disk cache (HTTP cache) | réponses HTTP cachables | en-têtes `Cache-Control` / `ETag` | persistant, partitionné par site |
+| Cache API (Service Worker) | réponses que **tu** stockes en JS | ton code SW | persistant, sous ton contrôle |
+| Storage (localStorage…) | données applicatives (pas du HTTP) | ton code JS | persistant, par origine |
+| bfcache | snapshot complet d'une page quittée | le navigateur | mémoire, courte durée |
 
-### 1.2 L'analogie de la bibliotheque
+Le piège de vocabulaire : « le cache » désigne le plus souvent le **HTTP cache** du navigateur (memory + disk), automatique et piloté par les en-têtes. La Cache API et Storage sont des mécanismes **programmables** distincts qu'on confond souvent avec lui.
 
-- **Memory Cache** = le livre que tu as déjà ouvert sur ton bureau (instantane)
-- **Service Worker** = ton assistant personnel qui va chercher dans tes etageres selon tes instructions
-- **Disk Cache** = tes etageres à la maison (rapide mais faut se lever)
-- **Network** = aller à la bibliotheque municipale (lent mais complet)
+### 2.2 Memory cache vs disk cache
 
-### 1.3 Tableau comparatif
+Le HTTP cache du navigateur a **deux niveaux physiques**. Le navigateur choisit seul lequel utiliser — tu ne le contrôles pas directement.
 
-| Couche | Stockage | Vitesse | Persistence | Controle dev |
-|--------|----------|---------|-------------|-------------|
-| Memory Cache | RAM | ~0ms | Tab/session | Aucun |
-| Service Worker | Cache API (disk) | ~1-5ms | Permanent | Total |
-| Disk Cache | Système fichiers | ~5-20ms | Permanent | Headers HTTP |
-| Network | Serveur distant | 50-2000ms | N/A | Headers HTTP |
+**Memory cache** — stocké en RAM :
+- Ultra-rapide (~0 ms), utilisé pour les ressources déjà chargées **dans le document courant**.
+- Éphémère : vidé à la fermeture de l'onglet.
+- Sert typiquement une image ou un script demandé **deux fois sur la même page**, ou après un rechargement doux quand l'onglet reste ouvert.
+- **Ignore largement `Cache-Control`** : c'est une optimisation interne du process de rendu, pas le cache HTTP « officiel ».
 
----
-
-## 2. Memory Cache vs Disk Cache
-
-### 2.1 Memory Cache
-
-Le Memory Cache (où "in-memory cache") est stocke **en RAM**. Il est :
-
-- **Cree** quand une page charge des ressources
-- **Detruit** quand l'onglet est ferme
-- **Non controle** par les headers `Cache-Control` (le navigateur decide seul)
+**Disk cache** — stocké sur le système de fichiers :
+- Plus lent que la RAM (~5-20 ms) mais **persistant** : il survit à la fermeture de l'onglet **et** du navigateur.
+- C'est le **vrai** cache HTTP : il respecte `Cache-Control`, `Expires`, `ETag`, `Last-Modified` (cf. modules 04 et 05).
+- Taille limitée, géré en LRU par le navigateur (les entrées les moins utilisées sont évincées).
 
 ```
-Exemple : Memory Cache en action
-================================
+Même page, deux <img src="/logo.svg"> :
+  1er logo.svg     -> disk cache (ou réseau si absent)
+  2e  logo.svg     -> memory cache (déjà décodé en RAM pour ce document)
 
-1. Page charge <img src="logo.png">       --> Network (premier chargement)
-2. Meme page, autre <img src="logo.png">  --> Memory Cache (meme document!)
-3. Scroll down, lazy-load logo.png         --> Memory Cache (encore)
-4. Fermer l'onglet                         --> Memory Cache vide
+F5 (onglet resté ouvert) :
+  assets           -> souvent (from memory cache)
+
+Fermer l'onglet, rouvrir l'URL :
+  memory cache vidé -> assets (from disk cache)
 ```
 
-**Ce qui va en Memory Cache** :
-- Images affichees sur la page
-- Scripts et feuilles de style du document courant
-- Ressources prefetchees avec `<link rel="preload">`
-
-### 2.2 Disk Cache (HTTP Cache)
-
-Le Disk Cache est le **vrai** cache HTTP. Il :
-
-- Respecte les headers `Cache-Control`, `Expires`, `ETag`
-- Persiste entre les sessions (fermer/rouvrir le navigateur)
-- A une taille limitee (géré par le navigateur, souvent 50-250 MB)
+Dans DevTools > Network, la colonne **Size** te dit lequel a répondu :
 
 ```
-Exemple : Disk Cache en action
-==============================
-
-1. Premiere visite de site.com     --> Network, stocke en Disk Cache
-2. Fermer le navigateur
-3. Rouvrir site.com                --> Disk Cache (si pas expire)
-4. Ctrl+Shift+R (hard refresh)     --> Ignore le Disk Cache, va au Network
+(memory cache)   -> servi depuis la RAM (onglet courant)
+(disk cache)     -> servi depuis le disque (persistant)
+(ServiceWorker)  -> servi par la Cache API d'un Service Worker
+12.4 kB          -> téléchargé depuis le réseau (taille réelle)
 ```
 
-### 2.3 Comment les observer dans DevTools
+> Règle mentale : **memory = tant que l'onglet vit**, **disk = tant que la fraîcheur HTTP tient**. C'est la réponse à la question 1 du cas concret.
+
+### 2.3 L'heuristique de fraîcheur — quand aucun `Cache-Control` n'est fourni
+
+Une réponse **sans** `Cache-Control` ni `Expires` n'est pas pour autant « jamais cachée ». Le navigateur applique alors une **heuristique de fraîcheur** : il *devine* une durée à partir de `Last-Modified`.
+
+La formule recommandée par la spec (RFC 9111, reprise par MDN) :
 
 ```
-Chrome DevTools > Network tab
-==============================
-
-La colonne "Size" indique la source :
-
-  (memory cache)    --> Servi depuis la RAM
-  (disk cache)      --> Servi depuis le disque
-  (ServiceWorker)   --> Servi par un Service Worker
-  24.5 kB           --> Telecharge depuis le reseau (taille reelle)
+freshness_heuristique ≈ (Date_maintenant − Last-Modified) × 0.1
 ```
 
-### 2.4 Serveur de test pour observer les caches
+Soit **~10 % du temps écoulé depuis la dernière modification**. Un fichier modifié il y a 100 jours et servi sans `Cache-Control` sera considéré frais ~10 jours.
+
+```http
+HTTP/1.1 200 OK
+Last-Modified: Tue, 03 Jun 2026 10:00:00 GMT
+# (pas de Cache-Control, pas de Expires)
+# -> le navigateur cache quand même, pour ~10 % de l'âge du fichier
+```
+
+**Pourquoi ça mord en pratique :** tu crois qu'un endpoint « non caché » repart toujours au réseau, mais le navigateur le garde silencieusement plusieurs heures ou jours. C'est une des causes de « pourquoi mon `/api/config` ne bouge pas alors que je n'ai mis aucun cache ». **Correctif :** ne jamais laisser la fraîcheur au devinage — poser un `Cache-Control` explicite (`no-cache`, `no-store`, ou un `max-age` choisi) supprime l'heuristique. C'est le prolongement direct du module 04.
+
+### 2.4 Cache HTTP du navigateur vs Cache API (Service Worker) — introduction
+
+Deux caches persistants coexistent côté client, souvent confondus :
+
+| | Disk cache (HTTP, navigateur) | Cache API (Service Worker) |
+|---|---|---|
+| Qui décide du contenu | le navigateur, selon les en-têtes | **ton code** JS |
+| Comment on écrit dedans | automatique à chaque réponse cachable | explicite : `cache.put()`, `cache.add()`, `cache.addAll()` |
+| Comment on lit | transparent, avant le réseau | explicite : `cache.match()` dans le handler `fetch` |
+| Respecte `Cache-Control` | oui | **non** — la Cache API n'honore pas les en-têtes HTTP |
+| Visible dans DevTools | Network (colonne Size) | Application > Cache Storage |
+| Cours | **ce module** (04, 05) | **module 15** (PWA / Service Workers) |
+
+Le disk cache est **passif** : tu poses des en-têtes, le navigateur gère. La Cache API est **active et programmable** : c'est un magasin de paires `Request`/`Response` que *ton* code remplit et interroge, disponible dans un Service Worker (et les workers). Point crucial à retenir dès maintenant : **la Cache API n'honore pas les en-têtes HTTP** — un `Cache-Control: no-store` ne l'empêche ni de stocker, ni de servir. Ce module s'arrête à cette distinction ; le code SW et les stratégies (cache-first, network-first, SWR côté client, offline) sont le **module 15**.
+
+### 2.5 Storage : localStorage, sessionStorage, IndexedDB
+
+Ces API stockent des **données applicatives**, pas des réponses HTTP. Ne les confonds pas avec le cache : elles ne mettent pas en cache tes requêtes, elles gardent l'état de ton appli.
+
+| API | Capacité | Persistance | Type de données | Usage TribuZen |
+|---|---|---|---|---|
+| `localStorage` | ~5-10 MB | permanente (jusqu'à effacement) | chaînes clé/valeur | préférence de thème, dernier onglet ouvert |
+| `sessionStorage` | ~5-10 MB | durée de l'onglet | chaînes clé/valeur | brouillon de formulaire en cours |
+| `IndexedDB` | large (100s de MB) | permanente | objets structurés, index | liste de membres offline, files d'attente |
 
 ```js
-import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+// localStorage : synchrone, chaînes uniquement -> on sérialise en JSON
+localStorage.setItem('tz.theme', JSON.stringify({ mode: 'dark' }));
+const theme = JSON.parse(localStorage.getItem('tz.theme') ?? '{}');
 
-const server = createServer(async (req, res) => {
-  if (req.url === '/') {
-    // Page HTML : ne pas cacher pour observer les comportements
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-  <title>Test Cache Navigateur</title>
-  <link rel="stylesheet" href="/style.css">
-  <link rel="preload" href="/logo.svg" as="image">
-</head>
-<body>
-  <img src="/logo.svg" alt="Logo">
-  <img src="/logo.svg" alt="Logo duplique">
-  <p>Ouvrez DevTools > Network pour observer les sources de cache</p>
-  <script src="/app.js"></script>
-</body>
-</html>`;
-    res.writeHead(200, {
-      'Content-Type': 'text/html',
-      'Cache-Control': 'no-cache'
-    });
-    res.end(html);
-    return;
-  }
+// sessionStorage : même API, effacé à la fermeture de l'onglet
+sessionStorage.setItem('tz.draft', formValue);
 
-  if (req.url === '/style.css') {
-    res.writeHead(200, {
-      'Content-Type': 'text/css',
-      'Cache-Control': 'max-age=3600',
-      'ETag': '"style-v1"'
-    });
-    res.end('body { font-family: sans-serif; color: #333; }');
-    return;
-  }
-
-  if (req.url === '/logo.svg') {
-    res.writeHead(200, {
-      'Content-Type': 'image/svg+xml',
-      'Cache-Control': 'max-age=86400'
-    });
-    res.end('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="40" fill="blue"/></svg>');
-    return;
-  }
-
-  if (req.url === '/app.js') {
-    res.writeHead(200, {
-      'Content-Type': 'application/javascript',
-      'Cache-Control': 'max-age=600'
-    });
-    res.end('console.log("App chargee a", new Date().toISOString());');
-    return;
-  }
-
-  res.writeHead(404);
-  res.end('Not found');
-});
-
-server.listen(3000, () => {
-  console.log('http://localhost:3000 -- Ouvrez DevTools > Network');
-});
+// IndexedDB : asynchrone, objets structurés (via une lib type idb-keyval en pratique)
 ```
 
----
+**Distinction clé :** le HTTP cache accélère le **chargement des ressources** (CSS, JS, images, réponses d'API GET). Storage garde des **données métier** que ton code lit et écrit. Mettre une réponse d'API dans `localStorage` « pour cacher », c'est réinventer (mal) le HTTP cache : tu perds la revalidation `ETag`, l'expiration automatique, l'éviction LRU.
 
-## 3. Service Worker Cache API
+### 2.6 Le Back-Forward Cache (bfcache)
 
-### 3.1 Qu'est-ce qu'un Service Worker ?
-
-Un Service Worker est un **proxy programmable** qui s'installe entre le navigateur et le réseau :
+Le **bfcache** gèle un snapshot complet d'une page quand l'utilisateur la quitte (DOM, JS heap, position de scroll, état des inputs). Sur « Précédent » / « Suivant », la page est restaurée **instantanément**, sans re-télécharger ni ré-exécuter le JS.
 
 ```
-  Page Web
-     |
-     |  fetch('/api/data')
-     v
-+-----------+
-|  Service  |   <-- Tu ecris le code qui decide :
-|  Worker   |       "Je sers depuis le cache ou le reseau ?"
-+-----------+
-     |
-     v  (si besoin)
-  Network
+Page /admin/membres  --clic sur une fiche-->  /admin/membre/42
+   [/admin/membres gelée en bfcache : DOM + scroll + état]
+
+/admin/membre/42  --bouton Précédent-->
+   [/admin/membres restaurée depuis bfcache]
+   Aucune requête réseau, aucun re-render, scroll conservé.
 ```
 
-### 3.2 Cycle de vie
-
-```
-1. register()   --> Le navigateur telecharge le SW
-2. install       --> SW installe, on peut pre-cacher des ressources
-3. activate      --> SW prend le controle des pages
-4. fetch         --> SW intercepte chaque requete
-5. (update)      --> Nouvelle version detectee, on recommence
-```
-
-### 3.3 API Cache : les méthodes essentielles
+C'est différent du disk/memory cache : le bfcache ne stocke pas des **ressources** mais une **page vivante entière**. Détection en JS :
 
 ```js
-// ---- caches.open(name) ----
-// Ouvre (ou cree) un cache nomme
-const cache = await caches.open('mon-app-v1');
-
-// ---- cache.put(request, response) ----
-// Stocke une paire requete/reponse
-await cache.put('/api/data', new Response('{"ok":true}'));
-
-// ---- cache.match(request) ----
-// Cherche une reponse en cache
-const response = await cache.match('/api/data');
-if (response) {
-  const data = await response.json();
-}
-
-// ---- cache.add(url) ----
-// Fetch + put en une seule operation
-await cache.add('/style.css');
-
-// ---- cache.addAll(urls) ----
-// Fetch + put pour plusieurs URLs
-await cache.addAll(['/style.css', '/app.js', '/logo.svg']);
-
-// ---- cache.delete(request) ----
-// Supprime une entree
-await cache.delete('/api/data');
-
-// ---- cache.keys() ----
-// Liste toutes les requetes en cache
-const requests = await cache.keys();
-```
-
-### 3.4 Enregistrement et installation
-
-```js
-// ---- Dans votre page HTML ----
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker
-    .register('/sw.js')
-    .then(reg => console.log('SW enregistre:', reg.scope))
-    .catch(err => console.error('SW erreur:', err));
-}
-```
-
-```js
-// ---- sw.js : Service Worker ----
-
-const CACHE_NAME = 'app-cache-v1';
-const PRECACHE_URLS = [
-  '/',
-  '/style.css',
-  '/app.js',
-  '/logo.svg'
-];
-
-// Phase d'installation : pre-cacher les ressources essentielles
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => {
-      console.log('[SW] Pre-cache des ressources');
-      return cache.addAll(PRECACHE_URLS);
-    })
-  );
-});
-
-// Phase d'activation : nettoyer les anciens caches
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then(cacheNames => {
-      return Promise.all(
-        cacheNames
-          .filter(name => name !== CACHE_NAME)
-          .map(name => {
-            console.log('[SW] Suppression ancien cache:', name);
-            return caches.delete(name);
-          })
-      );
-    })
-  );
-});
-```
-
----
-
-## 4. Stratégies Service Worker
-
-### 4.1 Cache-First
-
-```js
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) {
-        return cached; // Cache HIT
-      }
-      // Cache MISS : aller au reseau et stocker
-      return fetch(event.request).then(response => {
-        // Cloner car la reponse ne peut etre lue qu'une fois
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then(cache => {
-          cache.put(event.request, clone);
-        });
-        return response;
-      });
-    })
-  );
-});
-```
-
-**Usage** : fichiers statiques versionnes, polices, images.
-
-### 4.2 Network-First
-
-```js
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    fetch(event.request)
-      .then(response => {
-        // Succes reseau : mettre en cache et retourner
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then(cache => {
-          cache.put(event.request, clone);
-        });
-        return response;
-      })
-      .catch(() => {
-        // Reseau en echec : essayer le cache
-        return caches.match(event.request);
-      })
-  );
-});
-```
-
-**Usage** : pages HTML, contenu editorial, API critiques.
-
-### 4.3 Stale-While-Revalidate
-
-```js
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.open(CACHE_NAME).then(cache => {
-      return cache.match(event.request).then(cached => {
-        // Lancer la requete reseau en parallele (revalidation)
-        const fetchPromise = fetch(event.request).then(response => {
-          cache.put(event.request, response.clone());
-          return response;
-        });
-
-        // Retourner le cache immediatement, ou attendre le reseau
-        return cached || fetchPromise;
-      });
-    })
-  );
-});
-```
-
-**Usage** : avatars, previews, donnees semi-statiques.
-
-### 4.4 Comparaison visuelle
-
-```
-Cache-First :     Cache ------> [OUI] ----> Reponse
-                    |
-                  [NON]
-                    |
-                  Network ----> Reponse + mise en cache
-
-Network-First :   Network -----> [OK] ----> Reponse + mise en cache
-                    |
-                  [ERREUR]
-                    |
-                  Cache -------> Reponse
-
-SWR :             Cache ------> [OUI] ----> Reponse
-                    |               |
-                    |           Network ----> mise en cache (background)
-                  [NON]
-                    |
-                  Network ----> Reponse + mise en cache
-```
-
----
-
-## 5. bfcache (Back/Forward Cache)
-
-### 5.1 Qu'est-ce que le bfcache ?
-
-Le **bfcache** (back/forward cache) est un mécanisme du navigateur qui **gele** l'état complet d'une page quand l'utilisateur la quitte. Quand il appuie sur "Retour", la page est restauree **instantanement** (en mémoire, pas re-telecharge).
-
-```
-Page A -----> Navigation vers Page B
-  |
-  +-- [Page A gelee en bfcache : DOM, JS heap, tout]
-
-Page B -----> Bouton "Retour"
-  |
-  +-- [Page A restauree instantanement depuis bfcache]
-       Pas de requete reseau !
-       Pas de re-execution du JS !
-       Etat exact au moment du depart !
-```
-
-### 5.2 Ce qui bloque le bfcache
-
-| Bloqueur | Pourquoi | Solution |
-|----------|----------|----------|
-| `unload` event listener | Ancien, incompatible | Utiliser `pagehide` |
-| `Cache-Control: no-store` | Empeche la mise en cache | Utiliser `no-cache` si possible |
-| Connexions ouvertes (WebSocket) | État réseau non restaurable | Fermer dans `pagehide` |
-| `window.opener` | Référence inter-fenêtre | `rel="noopener"` |
-
-### 5.3 Événements bfcache
-
-```js
-// Detecter si la page est restauree depuis le bfcache
+// pageshow : event.persisted = true si restauré depuis le bfcache
 window.addEventListener('pageshow', (event) => {
   if (event.persisted) {
-    console.log('Page restauree depuis le bfcache !');
-    // Rafraichir les donnees si necessaire
-    refreshTimeSensitiveData();
+    // La page revient du bfcache : rafraîchir les données sensibles au temps
+    // (ex: badge de notifications, données qui ont pu changer)
+    refreshNotifications();
   }
 });
 
-// Preparation avant mise en bfcache
+// pagehide : préparer la mise en bfcache (fermer WebSocket, etc.)
 window.addEventListener('pagehide', (event) => {
   if (event.persisted) {
-    console.log('Page mise en bfcache');
-    // Fermer les connexions ouvertes
-    closeWebSockets();
+    closeLiveConnections();
   }
 });
 ```
 
-### 5.4 Tester le bfcache
+Ce qui **bloque** le bfcache (donc dégrade la navigation « back ») :
+
+| Bloqueur | Pourquoi | Correctif |
+|---|---|---|
+| listener `unload` | incompatible avec la mise en cache d'une page vivante | utiliser `pagehide` |
+| `Cache-Control: no-store` sur le document | interdit toute conservation de la réponse | `no-cache` si possible (revalide sans interdire) |
+| WebSocket / connexion ouverte | état réseau non restaurable | fermer dans `pagehide` |
+| `window.opener` accessible | référence inter-fenêtre | ouvrir avec `rel="noopener"` |
+
+### 2.7 La partition du cache (double-key) — le point à signaler
+
+**Changement majeur depuis 2020** (Chrome 85, Firefox, Safari) : le HTTP cache du navigateur est **partitionné par site**. Avant, une ressource était indexée par sa seule URL. Un fichier `jquery.min.js` servi par un CDN public était donc **partagé entre tous les sites** : si `site-a.com` l'avait déjà mis en cache, `site-b.com` le récupérait gratuitement.
+
+Aujourd'hui, la clé de cache est **double** (voire triple) :
 
 ```
-Chrome DevTools > Application > Back/forward cache
-  --> Cliquer "Test back/forward cache"
-  --> Le navigateur signale les problemes bloquants
+AVANT 2020 (single-key) :
+  clé = URL de la ressource
+  https://cdn.jsdelivr.net/jquery.js
+  -> partagé entre site-a.com, site-b.com, tous les sites
+
+DEPUIS 2020 (double-key / cache partitioning) :
+  clé = (site de la page top-level, URL de la ressource)
+  ( site-a.com , https://cdn.jsdelivr.net/jquery.js )   <- entrée A
+  ( site-b.com , https://cdn.jsdelivr.net/jquery.js )   <- entrée B distincte
+  -> chaque site retélécharge la ressource pour son propre compte
 ```
+
+**Pourquoi ce changement** : le cache partagé permettait des attaques de vie privée. Un site pouvait mesurer le temps de chargement d'une ressource pour **déduire** que tu avais visité un autre site (l'ayant déjà mise en cache) — un traçage cross-site sans cookie.
+
+**Impact perf à connaître (audit-first) :** le vieux conseil « utilise un CDN public partagé (Google Fonts, jsDelivr, cdnjs) pour profiter du cache déjà rempli des autres sites » est **mort**. Ce bénéfice n'existe plus : chaque site paie son propre premier téléchargement, quel que soit le nombre d'autres sites qui utilisent le même CDN. Conséquences pratiques :
+- Auto-héberger tes polices et libs critiques est souvent **aussi rapide ou plus rapide** qu'un CDN public (une connexion de moins, un `preconnect` en moins).
+- Le seul cache réellement partagé restant est le **CDN dédié à ton propre site** (module 08) — mais côté navigateur, chaque visiteur repart d'un cache vide pour ton origine.
+
+> À retenir : « CDN public = cache gratuit hérité des autres » était vrai avant 2020, faux aujourd'hui. C'est le point que tu dois signaler en audit de perf.
+
+### 2.8 DevTools : inspecter, vider, purger
+
+Le HTTP cache est la première cause de « ça marche chez moi » sur les assets. Deux zones de DevTools, et des outils du plus doux au plus radical :
+
+- **Network** : la colonne **Size** révèle la source de chaque requête (memory / disk / ServiceWorker / réseau).
+- **Application > Storage** : vue d'ensemble de *tout* ce qui est stocké pour le site (Cache Storage de la Cache API, Local/Session Storage, IndexedDB, Cookies) + le bouton **Clear site data**.
+
+| Action | Effet |
+|---|---|
+| `F5` / rechargement normal | revalide le document ; les sous-ressources encore « fraîches » restent servies du cache (memory/disk) |
+| `Ctrl+Shift+R` / `Cmd+Shift+R` (hard reload) | force le réseau pour le document **et** ses sous-ressources, en ignorant la fraîcheur |
+| DevTools > Network > **Disable cache** (coché) | tant que DevTools est ouvert, aucune ressource n'est servie du cache HTTP |
+| DevTools > **Application > Storage > Clear site data** | vide disk cache + Cache API + Storage (local/session/IndexedDB) + cookies pour ce site |
+| Clic droit sur le bouton recharger (DevTools ouvert) > **Empty Cache and Hard Reload** | vide le cache HTTP puis recharge tout depuis le réseau |
+
+> **Purge ciblée de la Cache API :** `Clear site data` et `Empty Cache and Hard Reload` vident aussi la Cache API. Mais tant qu'un **Service Worker actif** re-remplit son cache, la purge peut sembler sans effet : il faut aussi *unregister* le SW (Application > Service Workers > Unregister) — détail au module 15.
+
+Méthode de diagnostic d'un asset qui ne se met pas à jour :
+1. Ouvre Network, coche **Disable cache**, recharge. L'asset est-il correct maintenant ? → c'est bien un problème de cache HTTP.
+2. Décoche Disable cache, recharge. Regarde la colonne **Size** : `(disk cache)` confirme que le navigateur ne consulte pas le serveur.
+3. Clique la requête > onglet **Headers** : lis le `Cache-Control` de la **réponse d'origine**. Un `max-age` élevé sans stratégie de versionnage est la cause racine.
+4. Solution durable : **versionner l'URL de l'asset** (`main.a1b2c3.css` avec hash de contenu). Une nouvelle version = une nouvelle URL = une nouvelle entrée de cache. On peut alors mettre `max-age=31536000, immutable` sans jamais servir de version périmée. C'est la réponse à la question 3 du cas concret — le problème se règle par le **nommage**, pas par une durée de cache plus courte.
+
+### 2.9 Cache et navigation : reload vs lien vs back
+
+Le **type de navigation** change le comportement du cache. Même URL, résultats différents :
+
+| Navigation | Comportement cache | Requête émise |
+|---|---|---|
+| Saisie d'URL / clic sur un lien | consultation normale du HTTP cache (memory/disk selon fraîcheur) | rien si frais |
+| `F5` (reload) | revalide le document ; certaines sous-ressources peuvent être revalidées aussi | `Cache-Control: max-age=0` + conditionnel |
+| `Ctrl+Shift+R` (hard reload) | bypass complet du cache HTTP | `Cache-Control: no-cache` (200 forcé) |
+| Bouton **Précédent / Suivant** | tente d'abord le **bfcache** ; sinon le HTTP cache | rien si bfcache |
+
+Côté Fetch API, ces comportements correspondent aux options `cache: 'no-cache'` (comme un `F5`) et `cache: 'reload'` (comme un hard reload). C'est pour ça qu'un même contenu peut apparaître instantané via « Précédent » (bfcache), rapide via un lien (disk cache), et lent via hard reload (réseau forcé).
 
 ---
 
-## 6. Preload, Prefetch, Preconnect
+## 3. Worked examples
 
-### 6.1 Les trois mécanismes
+### Exemple 1 — Diagnostiquer et purger l'asset TribuZen périmé (le cas concret, résolu)
 
-```
-                    Priorite    Quand        Pour quoi
-                    --------    -----        ---------
-<link rel="preload">    Haute     Maintenant   Ressources de la page actuelle
-<link rel="prefetch">   Basse     Temps libre  Ressources de la prochaine page
-<link rel="preconnect"> Haute     Maintenant   Etablir la connexion TCP/TLS
-```
+Reprise du problème d'ouverture : le `main.css` corrigé n'apparaît pas chez le collègue.
 
-### 6.2 Preload
+**Étape 1 — reproduire et confirmer que c'est le cache.**
+DevTools > Network, coche **Disable cache**, `F5`. La sidebar se corrige. → C'est bien du cache HTTP, pas un bug de déploiement.
 
-```html
-<!-- Precharger une police critique -->
-<link rel="preload" href="/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
-
-<!-- Precharger une image hero -->
-<link rel="preload" href="/hero.webp" as="image">
-
-<!-- Precharger un script critique -->
-<link rel="preload" href="/critical.js" as="script">
-```
+**Étape 2 — identifier le niveau et la cause.**
+Décoche Disable cache, `F5`. La colonne Size affiche :
 
 ```
-SANS preload :
-  HTML ----parse----> decouvre font.woff2 dans CSS -----> telecharge
-                          ^                                   ^
-                          |_____ 500ms _____|_____ 300ms _____|
-
-AVEC preload :
-  HTML ----parse---+----> decouvre font.woff2 (deja en cache!)
-                   |
-                   +----> preload font.woff2 (demarre immediatement)
-                              ^
-                              |_____ 300ms (en parallele du parse) _____|
+main.css   200   (from disk cache)
 ```
 
-### 6.3 Prefetch
-
-```html
-<!-- Prefetcher la prochaine page probable -->
-<link rel="prefetch" href="/page-suivante.html">
-
-<!-- Prefetcher des donnees pour la page suivante -->
-<link rel="prefetch" href="/api/next-page-data.json">
-```
-
-**Attention** : le navigateur peut ignorer les prefetch si la bande passante est limitee.
-
-### 6.4 Preconnect
-
-```html
-<!-- Etablir la connexion a un CDN tiers -->
-<link rel="preconnect" href="https://cdn.example.com">
-
-<!-- DNS-only (moins couteux) -->
-<link rel="dns-prefetch" href="https://analytics.example.com">
-```
+Clique la requête > **Headers** > Response Headers :
 
 ```
-SANS preconnect :
-  fetch('https://cdn.example.com/data')
-    DNS (50ms) + TCP (50ms) + TLS (100ms) + Request (200ms) = 400ms
-
-AVEC preconnect :
-  <link rel="preconnect" href="https://cdn.example.com">
-  ...plus tard...
-  fetch('https://cdn.example.com/data')
-    [DNS + TCP + TLS deja faits!] + Request (200ms) = 200ms
+Cache-Control: max-age=86400
 ```
 
-### 6.5 Servir des hint headers cote serveur
+La réponse d'origine a demandé 24 h de fraîcheur. L'URL `main.css` n'a pas changé → le navigateur estime sa copie disque encore fraîche → il ne contacte même pas le serveur. `F5` ne suffit pas car il ne bypass pas une sous-ressource encore fraîche ; `Ctrl+Shift+R` marche car il force le réseau.
+
+**Étape 3 — purge immédiate pour le collègue.**
+Clic droit sur recharger (DevTools ouvert) > **Empty Cache and Hard Reload** (ou Application > Storage > **Clear site data**). Il voit la version corrigée.
+
+**Étape 4 — correctif durable (le vrai fix).**
+Ne pas baisser le `max-age` (on perdrait tout le bénéfice cache). On **versionne l'URL par hash de contenu** au build :
+
+```
+Avant :  /assets/main.css            Cache-Control: max-age=86400
+Après :  /assets/main.a1b2c3d4.css   Cache-Control: max-age=31536000, immutable
+```
+
+À chaque changement du CSS, le hash change → nouvelle URL → nouvelle entrée de cache, jamais de collision avec l'ancienne. Le HTML (lui en `no-cache`, donc toujours revalidé) pointe vers la nouvelle URL. Plus jamais de « ça marche chez moi » sur les assets — et plus besoin de demander à qui que ce soit de purger.
+
+### Exemple 2 — Rafraîchir des données au retour bfcache
+
+Sur `/admin/membres`, un badge affiche le nombre de demandes d'adhésion en attente. L'admin clique une fiche (`/admin/membre/42`), traite la demande, puis fait « Précédent ». Grâce au bfcache, la liste revient **instantanément** — mais le badge affiche encore l'ancien compte, car le JS n'a pas été ré-exécuté.
 
 ```js
-import { createServer } from 'node:http';
+// src/pages/MembersPage : au montage on charge le compte...
+async function loadPendingCount() {
+  const res = await fetch('/api/admin/pending-count');
+  const { count } = await res.json();
+  document.querySelector('#pending-badge').textContent = String(count);
+}
+loadPendingCount();
 
-const server = createServer((req, res) => {
-  if (req.url === '/') {
-    // Envoyer des Link headers pour le preloading
-    res.writeHead(200, {
-      'Content-Type': 'text/html',
-      'Link': [
-        '</style.css>; rel=preload; as=style',
-        '</app.js>; rel=preload; as=script',
-        '</font.woff2>; rel=preload; as=font; crossorigin',
-        '<https://api.example.com>; rel=preconnect'
-      ].join(', '),
-      'Cache-Control': 'no-cache'
-    });
-
-    res.end(`<!DOCTYPE html>
-<html>
-<head>
-  <link rel="stylesheet" href="/style.css">
-</head>
-<body>
-  <h1>Page avec preloading</h1>
-  <script src="/app.js"></script>
-</body>
-</html>`);
-    return;
+// ...mais un retour bfcache NE relance PAS ce code.
+// pageshow avec persisted=true est le seul signal fiable.
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted) {
+    // Page ressortie du bfcache : le compte a pu changer -> on rafraîchit
+    loadPendingCount();
   }
-
-  if (req.url === '/style.css') {
-    res.writeHead(200, {
-      'Content-Type': 'text/css',
-      'Cache-Control': 'max-age=3600'
-    });
-    res.end('h1 { color: navy; }');
-    return;
-  }
-
-  if (req.url === '/app.js') {
-    res.writeHead(200, {
-      'Content-Type': 'application/javascript',
-      'Cache-Control': 'max-age=3600'
-    });
-    res.end('console.log("App loaded");');
-    return;
-  }
-
-  res.writeHead(404);
-  res.end('Not found');
-});
-
-server.listen(3000, () => {
-  console.log('Serveur avec preload hints sur http://localhost:3000');
 });
 ```
 
-### 6.6 HTTP/2 Server Push vs Preload (Note historique)
+**Pourquoi c'est correct :** `pageshow` se déclenche à chaque affichage de la page, y compris après restauration bfcache ; `event.persisted` distingue une restauration bfcache (`true`) d'un chargement normal (`false`). On ne rafraîchit **que** la donnée sensible au temps, sans jeter le bénéfice de navigation instantanée du bfcache.
+
+---
+
+## 4. Pièges & misconceptions
+
+### PIÈGE #1 — Croire que `Cache-Control` pilote le memory cache
+
+`Cache-Control` pilote le **disk cache** (le cache HTTP persistant). Le **memory cache** est une optimisation interne du process de rendu : il peut servir une ressource depuis la RAM même avec des en-têtes restrictifs, tant que l'onglet vit et que le document courant l'utilise. Ne t'attends pas à contrôler finement le memory cache par en-têtes — pour tester le vrai comportement HTTP, **ferme l'onglet** (vide la RAM) ou coche **Disable cache**.
+
+### PIÈGE #2 — Croire qu'« aucun `Cache-Control` » = « aucun cache »
 
 ```
-HTTP/2 Server Push (DEPRECIE dans Chrome 106+)
-===============================================
-Avant : le serveur pouvait "pousser" des ressources sans que le client les demande.
-Probleme : le serveur ne savait pas si le client les avait deja en cache.
-Resultat : gaspillage de bande passante.
-Solution moderne : utiliser <link rel="preload"> + Early Hints (103).
+❌ « Je n'ai mis aucun en-tête de cache sur /api/config, donc le navigateur redemande à chaque fois. »
 ```
 
-### 6.7 Early Hints (103)
+Faux : sans directive, le navigateur applique l'**heuristique de fraîcheur** (~10 % du temps depuis `Last-Modified`) et garde silencieusement la réponse. Pour vraiment forcer un aller-retour, il faut un `Cache-Control` **explicite** (`no-cache` pour revalider, `no-store` pour ne rien garder). L'absence d'en-tête n'est pas neutre.
+
+### PIÈGE #3 — Confondre Cache API et HTTP cache
+
+```
+❌ « J'ai mis Cache-Control: max-age=0, mais mon Service Worker sert quand même l'ancienne version. »
+```
+
+Les deux caches sont indépendants et la **Cache API n'honore pas les en-têtes HTTP**. Un Service Worker qui a fait `cache.put('/data', response)` sert **sa** copie, quels que soient les `Cache-Control` — c'est **ton** code qui décide. `Cache-Control` ne vide pas la Cache API. Pour purger, il faut du code SW (`caches.delete(...)`) ou, en debug, Application > Cache Storage + Unregister du SW. (Détail au module 15.)
+
+### PIÈGE #4 — Utiliser `localStorage` comme cache de réponses d'API
 
 ```js
-import { createServer } from 'node:http';
-
-const server = createServer((req, res) => {
-  if (req.url === '/') {
-    // Envoyer un 103 Early Hints avant la reponse finale
-    // Note : le support Node.js natif est limite,
-    // ceci montre le concept
-    res.writeEarlyHints({
-      link: [
-        '</style.css>; rel=preload; as=style',
-        '</app.js>; rel=preload; as=script'
-      ]
-    });
-
-    // Simuler un traitement serveur long
-    setTimeout(() => {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end('<html><head><link rel="stylesheet" href="/style.css"></head><body>OK</body></html>');
-    }, 500);
-    return;
-  }
-
-  res.writeHead(404);
-  res.end();
-});
-
-server.listen(3000, () => {
-  console.log('Serveur Early Hints sur http://localhost:3000');
-});
+// ❌ Réinvente (mal) le HTTP cache
+const cached = localStorage.getItem('members');
+if (cached) return JSON.parse(cached);          // jamais revalidé, jamais expiré
+const data = await fetch('/api/members').then(r => r.json());
+localStorage.setItem('members', JSON.stringify(data));
 ```
 
-```
-SANS Early Hints :
-  Client ---- GET / ----> Serveur (500ms traitement)
-  Client <--- 200 + HTML  (puis decouvre style.css)
-  Client ---- GET /style.css ----> Serveur
-  Total : ~700ms avant affichage
+Problèmes : pas de revalidation `ETag`, pas d'expiration, pas d'éviction, sérialisation synchrone bloquante, quota ~5 MB vite atteint. Pour cacher des réponses HTTP, laisse le **HTTP cache** faire son travail (en-têtes) ou utilise la **Cache API** (contrôle explicite, asynchrone). Storage est pour l'**état applicatif** (préférences, brouillons), pas pour cacher du réseau.
 
-AVEC Early Hints (103) :
-  Client ---- GET / ----> Serveur (500ms traitement)
-  Client <--- 103 Early Hints (preload style.css)
-  Client ---- GET /style.css ----> (pendant que le serveur traite)
-  Client <--- 200 + HTML          (style.css deja en cache!)
-  Total : ~500ms avant affichage (200ms gagnes)
+### PIÈGE #5 — Compter sur le cache partagé d'un CDN public
+
+```
+❌ « On met jQuery/Google Fonts depuis un CDN public : les visiteurs l'ont déjà en cache
+   d'autres sites, ça charge gratuitement. »
+```
+
+Faux depuis 2020. Le **cache partitionné (double-key)** isole chaque site : `( ton-site.com , url-cdn )` est une entrée distincte de celle des autres sites. Ton visiteur retélécharge la ressource pour ton compte, même si 1000 autres sites servent le même fichier depuis le même CDN. Souvent, **auto-héberger** est aussi rapide (une connexion de moins). Le seul cache utilement partagé aujourd'hui est le **CDN dédié à ton site** (module 08), pas le cache navigateur cross-site.
+
+### PIÈGE #6 — Un listener `unload` qui tue le bfcache
+
+Ajouter `window.addEventListener('unload', ...)` (souvent copié pour de l'analytics) **désactive le bfcache** sur toute la page : la navigation « Précédent » redevient un rechargement complet. Utilise `pagehide` (ou `visibilitychange`) à la place. Vérifie dans DevTools > Application > Back/forward cache.
+
+---
+
+## 5. Ancrage TribuZen
+
+Sur l'admin TribuZen, le cache navigateur se manifeste à trois endroits concrets :
+
+**Assets `from disk cache`.** Le bundle Vite (`/assets/*.js`, `/assets/*.css`) est servi avec un hash de contenu dans le nom (`main.a1b2c3.js`) et `Cache-Control: max-age=31536000, immutable`. Résultat : au deuxième chargement, DevTools > Network affiche `(disk cache)` pour tout le bundle, et le `document` HTML (en `no-cache`) est le seul aller-retour réseau. C'est le comportement cible : assets figés, HTML frais.
+
+**bfcache sur navigation back.** Les pages de liste (`/admin/membres`, `/admin/familles`) doivent rester compatibles bfcache pour que le « Précédent » soit instantané et conserve le scroll. On y interdit tout listener `unload`, on ferme la connexion temps-réel (badge de présence) dans `pagehide`, et on rafraîchit les compteurs sensibles via `pageshow` + `event.persisted` (Exemple 2).
+
+**Debug et purge d'un asset périmé.** Après un déploiement, le protocole de vérification est : Network > **Disable cache** pour confirmer que le nouveau code est bon, puis lecture de la colonne Size + des Response Headers pour distinguer un cache trop agressif d'un vrai bug. Si un fichier non hashé (favicon, manifest, `/api/config` sans en-tête → heuristique) traîne en `disk cache`, on purge via Application > **Clear site data** en dépannage, puis on règle par le versionnage d'URL ou un `Cache-Control` explicite — pas par un `max-age` plus court.
+
+Fichiers cibles dans `smaurier/tribuzen` :
+```
+tribuzen/
+  vite.config.ts                 # hash de contenu sur les assets (build.rollupOptions)
+  src/lib/bfcache.ts             # helpers pageshow/pagehide (refresh compteurs)
+  src/pages/MembersPage.tsx      # loadPendingCount + pageshow persisted
+  server/headers.ts              # Cache-Control immutable sur /assets, no-cache sur le HTML
 ```
 
 ---
 
-## Points clés
+## 6. Points clés
 
-1. Le navigateur utilise **4 couches de cache** dans l'ordre : Memory Cache, Service Worker, Disk Cache, Network.
-2. Le **Memory Cache** est volatile (lie a l'onglet) et non controlable par le développeur.
-3. Le **Disk Cache** est le cache HTTP classique, controle par les headers `Cache-Control`.
-4. La **Service Worker Cache API** donne un controle **total** sur ce qui est cache et comment il est servi.
-5. Le **bfcache** gele et restaure des pages entieres pour une navigation instantanee avec le bouton Retour.
-6. **`<link rel="preload">`** charge des ressources critiques en avance pour la page actuelle.
-7. **`<link rel="prefetch">`** pre-charge des ressources pour les navigations futures (priorite basse).
-8. **`<link rel="preconnect">`** etablit les connexions DNS+TCP+TLS a l'avance pour les domaines tiers.
-
----
-
-## Lab associe
-
-> Lab 07 — Construire un Service Worker avec les 3 stratégies (Cache-First, Network-First, SWR) et observer les couches de cache dans DevTools
+1. « Le cache navigateur » regroupe des mécanismes distincts : memory cache, disk cache (HTTP), Cache API (Service Worker), Storage, bfcache.
+2. Memory cache = RAM, éphémère (vidé à la fermeture de l'onglet), largement opaque aux en-têtes ; disk cache = persistant, piloté par `Cache-Control`/`ETag`.
+3. Dans DevTools > Network, la colonne Size révèle la source : `(memory cache)`, `(disk cache)`, `(ServiceWorker)`, ou la taille réelle si réseau.
+4. Sans `Cache-Control`, le navigateur applique l'heuristique de fraîcheur (~10 % du temps depuis `Last-Modified`) — l'absence d'en-tête n'est pas « pas de cache ».
+5. Le HTTP cache est passif (en-têtes) ; la Cache API est active, programmable et **n'honore pas les en-têtes HTTP** — deux caches indépendants (Cache API détaillée au module 15).
+6. Storage (localStorage/sessionStorage/IndexedDB) sert à l'état applicatif, pas à cacher des réponses HTTP.
+7. Le bfcache gèle une page entière pour un « Précédent » instantané ; `unload` et `no-store` le bloquent ; on rafraîchit via `pageshow` + `event.persisted`.
+8. Depuis 2020, le cache est partitionné par site (double-key) : le cache partagé cross-site des CDN publics n'existe plus — auto-héberger est souvent aussi rapide.
+9. On purge via DevTools (Disable cache, Clear site data, Empty Cache and Hard Reload) ; on règle durablement par le versionnage d'URL (hash + `immutable`), pas par un `max-age` plus court.
 
 ---
 
-## Pour aller plus loin
-
-- [web.dev - Service Worker Caching Stratégies](https://web.dev/offline-cookbook/)
-- [MDN - Cache API](https://developer.mozilla.org/fr/docs/Web/API/Cache)
-- [web.dev - Back/forward cache](https://web.dev/bfcache/)
-- [web.dev - Preload critical assets](https://web.dev/preload-critical-assets/)
-- [web.dev - Early Hints](https://web.dev/early-hints/)
-
----
-
-## Si tu es perdu
-
-Imagine que tu prepares un repas :
-
-- **Memory Cache** = les ingredients déjà sur ton plan de travail (instantane, mais disparaissent quand tu ranges la cuisine)
-- **Service Worker** = ton robot de cuisine programme : tu lui as dit "si on me demandé de la soupe, prends celle du frigo ; si on me demandé du pain, va à la boulangerie"
-- **Disk Cache** = ton frigo et tes placards (rapide d'acces, persistant)
-- **Network** = aller au supermarche (long, mais tu trouves tout)
-
-Le navigateur regarde d'abord le plan de travail, puis demandé au robot, puis ouvre le frigo, et en dernier recours va au supermarche. C'est logique : on commence par le plus rapide.
-
----
-
-## Exercice pratique — Chrome DevTools
-
-### Objectif
-
-Observer les différentes couches de cache du navigateur dans DevTools : distinguer memory cache et disk cache, inspecter les caches Service Worker dans l'onglet Application, et tester le bfcache.
-
-### Etapes
-
-#### Partie 1 : Memory cache vs Disk cache dans l'onglet Network
-
-1. **Lancer le serveur de test**
-   - Utilise le serveur de la section 2.4 de ce module, ou lance un des serveurs de lab précédent :
-   ```bash
-   node labs/lab-03-cache-control-lab/solution.js
-   ```
-
-2. **Observer le disk cache**
-   - Ouvre Chrome et va sur `http://localhost:3000`
-   - Ouvre DevTools (`F12`) > onglet **Network**
-   - Recharge (`F5`) pour que les ressources soient telechargees et mises en cache
-   - **Ferme l'onglet** (cela vide le memory cache)
-   - Rouvre `http://localhost:3000` dans un nouvel onglet avec DevTools ouvert
-   - Observe la colonne **Size** :
-     - Les ressources cachees apparaissent comme `(from disk cache)`
-     - C'est le cache HTTP classique, stocke sur le disque dur
-     - Il survit à la fermeture de l'onglet et même du navigateur
-
-3. **Observer le memory cache**
-   - Sans fermer l'onglet, recharge avec `F5`
-   - Observe la colonne **Size** :
-     - Certaines ressources passent de `(from disk cache)` a `(from memory cache)`
-     - Le memory cache est en RAM : il est plus rapide mais volatil
-   - Regle pratique :
-     - Les **images** et **scripts** du document courant vont souvent en memory cache
-     - Les ressources chargees pour la première fois dans cette session viennent du disk cache
-   - Observe la colonne **Time** : les deux types affichent `0 ms`, mais memory cache est techniquement plus rapide
-
-4. **Filtrer par source de cache**
-   - Dans le champ de filtre de l'onglet Network, utilise :
-     - `larger-than:0` pour ne voir que les ressources telechargees depuis le réseau
-     - Ou clique sur les en-tetes de colonnes pour trier par **Size** et regrouper les `(from memory cache)` et `(from disk cache)`
-
-#### Partie 2 : Inspecter les caches Service Worker dans l'onglet Application
-
-5. **Ouvrir l'onglet Application**
-   - Dans DevTools, clique sur l'onglet **Application** (s'il n'est pas visible, clique sur `>>` pour le trouver)
-   - Dans le panneau de gauche, développé la section **Cache Storage**
-
-6. **Explorer le contenu du cache**
-   - Si un Service Worker est installe sur le site, tu verras un ou plusieurs caches nommes (ex: `app-cache-v1`)
-   - Clique sur un nom de cache pour voir la liste des URLs stockees
-   - Pour chaque entree, tu peux voir :
-     - L'URL de la requête
-     - Les headers de la réponse stockee
-     - Le body de la réponse (onglet **Preview**)
-
-7. **Supprimer des entrees de cache**
-   - Clique-droit sur une entree et choisis **Delete** pour supprimer une seule ressource
-   - Ou clique sur le bouton **Clear** (icone poubelle) pour vider tout un cache
-   - Cela permet de tester le comportement de l'application quand le cache est vide
-
-8. **Vérifier l'état du Service Worker**
-   - Dans le panneau de gauche, clique sur **Service Workers**
-   - Tu verras le Service Worker enregistre, son statut (active, waiting, etc.)
-   - Tu peux cocher **Offline** pour simuler une perte de connexion et vérifier que le Service Worker sert les ressources depuis le cache
-
-#### Partie 3 : Tester le bfcache
-
-9. **Ouvrir le testeur de bfcache**
-   - Dans DevTools, va dans l'onglet **Application**
-   - Dans le panneau de gauche, cherche la section **Back/forward cache**
-   - Clique sur **Test back/forward cache**
-
-10. **Effectuer le test**
-    - Chrome va automatiquement naviguer ailleurs puis revenir sur ta page
-    - Le résultat du test s'affiche :
-      - **Restaure depuis le bfcache** : la page est compatible, navigation instantanee
-      - **Non restaure** : la page a des éléments bloquants
-    - Si le bfcache echoue, DevTools liste les raisons bloquantes :
-      - `unload` event listener
-      - `Cache-Control: no-store`
-      - Connexions WebSocket ouvertes
-      - `window.opener` present
-
-11. **Observer le bfcache en action**
-    - Navigue vers un autre site (ex: tape `about:blank` dans la barre d'adresse)
-    - Appuie sur le bouton **Retour** du navigateur
-    - Si le bfcache fonctionne :
-      - La page se restaure **instantanement** (pas de requête réseau, pas de re-exécution du JS)
-      - Dans l'onglet Network, **aucune nouvelle requête** n'apparait
-    - Si le bfcache ne fonctionne pas :
-      - La page est rechargee normalement avec des requêtes réseau
-
-### Ce que tu devrais observer
+## 7. Seeds Anki
 
 ```
-Colonne Size dans l'onglet Network :
-  (memory cache)     --> Ressource en RAM (onglet courant)
-  (disk cache)       --> Ressource sur le disque (persistant)
-  (ServiceWorker)    --> Servie par un Service Worker
-  24.5 kB            --> Telechargee depuis le reseau
-
-Onglet Application > Cache Storage :
-  app-cache-v1/
-    /               text/html        OK
-    /style.css      text/css         OK
-    /app.js         application/js   OK
-
-Onglet Application > Back/forward cache :
-  Test result: "Successfully served from back/forward cache"
-  OU
-  Test result: "Not served" + liste des raisons bloquantes
-```
-
-### Questions de reflexion
-
-- Pourquoi une image apparait-elle en `(from memory cache)` après un refresh mais en `(from disk cache)` après la reouverture d'un onglet ?
-- Quelle est la différence entre le Disk Cache (controle par les headers HTTP) et le Cache Storage (controle par le Service Worker) ?
-- Pourquoi `Cache-Control: no-store` bloque-t-il le bfcache ? Quel impact cela a-t-il sur la navigation avec le bouton Retour ?
-- Si tu coches "Offline" dans le panneau Service Workers, quelles ressources sont encore accessibles ? Pourquoi ?
-
----
-
-## Defi
-
-### Enonce
-
-Tu as un site e-commerce avec ces ressources :
-- `/index.html` (page d'accueil, change toutes les heures)
-- `/app.abc123.js` (script avec hash)
-- `/api/produits` (catalogue, change toutes les 5 minutes)
-- `/images/hero.webp` (banniere, change chaque semaine)
-- `/api/panier` (panier utilisateur, temps réel)
-
-Pour chaque ressource, indique :
-1. Quelle stratégie Service Worker utiliser
-2. Quel header `Cache-Control` configurer cote serveur
-3. Faut-il un `<link rel="preload">` ?
-
-### Reponse
-
-```
-/index.html
-  Strategie SW : Network-First (toujours tenter du frais, fallback cache)
-  Cache-Control : no-cache (revalider a chaque fois)
-  Preload : Non (c'est la page elle-meme)
-
-/app.abc123.js
-  Strategie SW : Cache-First (le hash garantit l'immutabilite)
-  Cache-Control : max-age=31536000, immutable
-  Preload : Oui --> <link rel="preload" href="/app.abc123.js" as="script">
-
-/api/produits
-  Strategie SW : Stale-While-Revalidate (rapidite + fraicheur acceptable)
-  Cache-Control : max-age=60, stale-while-revalidate=300
-  Preload : Non (donnees dynamiques)
-
-/images/hero.webp
-  Strategie SW : Cache-First (change rarement)
-  Cache-Control : max-age=604800 (7 jours)
-  Preload : Oui --> <link rel="preload" href="/images/hero.webp" as="image">
-
-/api/panier
-  Strategie SW : Network-Only (temps reel, pas de cache)
-  Cache-Control : no-store
-  Preload : Non
+Pourquoi une même ressource peut-elle être servie (from memory cache) puis (from disk cache) ?|Memory cache = RAM liée à l'onglet courant (2e usage sur la même page, ou F5 onglet ouvert). Dès que l'onglet est fermé, la RAM est vidée : au rechargement, la ressource repart du disk cache, qui lui est persistant.
+Que fait le navigateur avec une réponse qui n'a AUCUN Cache-Control ni Expires ?|Il applique l'heuristique de fraîcheur : il devine une durée valide ≈ 10 % du temps écoulé depuis Last-Modified. L'absence d'en-tête ne veut donc pas dire "pas de cache". Pour forcer un aller-retour, poser un Cache-Control explicite (no-cache ou no-store).
+Quelle est la différence entre le disk cache HTTP et la Cache API d'un Service Worker ?|Le disk cache est passif : le navigateur écrit/lit selon Cache-Control/ETag. La Cache API est active et programmable : ton code JS décide quoi mettre (cache.put) et quoi servir (cache.match), et elle N'HONORE PAS les en-têtes HTTP. Cache-Control ne la vide pas.
+Pourquoi ne faut-il pas utiliser localStorage pour cacher des réponses d'API ?|Pas de revalidation ETag, pas d'expiration, pas d'éviction LRU, API synchrone bloquante, quota ~5 MB. Storage est pour l'état applicatif (préférences, brouillons). Pour cacher du HTTP, utiliser le HTTP cache (en-têtes) ou la Cache API.
+Qu'est-ce que la partition du cache (double-key) et depuis quand ?|Depuis 2020, la clé de cache est (site de la page top-level, URL de la ressource) au lieu de l'URL seule. Chaque site a sa propre entrée : le cache d'un CDN public n'est plus partagé entre sites. But : bloquer le traçage cross-site par timing.
+Comment purger un asset périmé dans DevTools, et comment régler ça durablement ?|Purge de dépannage : Disable cache, Empty Cache and Hard Reload, ou Application > Clear site data. Fix durable : versionner l'URL par hash de contenu (main.a1b2c3.css) + max-age=31536000, immutable. Nouvelle version = nouvelle URL = nouvelle entrée. Pas besoin de baisser le max-age.
+Qu'est-ce que le bfcache et comment détecter une restauration en JS ?|Le Back-Forward Cache gèle une page entière (DOM, JS heap, scroll) pour restaurer instantanément au « Précédent ». On détecte via l'event pageshow avec event.persisted === true, où l'on rafraîchit seulement les données sensibles au temps.
+Qu'est-ce qui bloque le bfcache ?|Un listener unload (utiliser pagehide à la place), Cache-Control no-store sur le document, des connexions ouvertes non fermées (WebSocket), un window.opener accessible (utiliser rel=noopener). DevTools > Application > Back/forward cache liste les causes.
+Quelle est la différence de comportement cache entre F5 et Ctrl+Shift+R ?|F5 revalide le document (envoie Cache-Control: max-age=0 + conditionnel) mais peut servir des sous-ressources encore fraîches. Ctrl+Shift+R (hard reload) envoie Cache-Control: no-cache et force un 200 réseau pour le document ET ses sous-ressources.
 ```
 
 ---
 
-## Navigation
+## Pont vers le lab
 
-| Précédent | Suivant |
-|:---------:|:-------:|
-| [Module 06 — Stale-While-Revalidate & Stratégies de cache](./06-stale-while-revalidate.md) | [Module 08 — CDN](./08-cdn.md) |
-
----
-
-<!-- parcours-recommande -->
-
-::: tip Parcours recommandé
-1. **Screencast** : [screencast 07 cache navigateur](../screencasts/screencast-07-cache-navigateur.md)
-2. **Lab** : [lab-06-cache-stratégies](../labs/lab-06-cache-strategies/README)
-3. **Visualisation** : [Multi-Layer Cache](../visualizations/multi-layer-cache.html)
-4. **Quiz** : [quiz 07 browser cache](../quizzes/quiz-07-browser-cache.html)
-:::
+> Lab associé : `11-http-caching/labs/lab-07-cache-navigateur/README.md`. Observer en direct dans DevTools la bascule memory/disk cache, l'heuristique de fraîcheur sur une réponse sans en-tête, la restauration bfcache, et purger le cache — corrigé inline, variante J+30, portage TribuZen.

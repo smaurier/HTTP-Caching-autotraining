@@ -1,1051 +1,445 @@
-# Module 11 — ISR & SSG : Rendu statique intelligent
+---
+titre: ISR & SSG — rendu statique et régénération incrémentale
+cours: 11-http-caching
+notions: [SSG, ISR, "generateStaticParams()", "export const revalidate", dynamicParams, "revalidate temporel (time-based)", on-demand revalidation, "revalidatePath()", "revalidateTag()", fetch next tags, SSG vs ISR vs SSR, "params async (Promise)"]
+outcomes:
+  - sait pré-rendre des pages au build avec generateStaticParams et servir du HTML statique
+  - sait activer l'ISR avec export const revalidate et expliquer le flux stale-while-revalidate qui en découle
+  - sait déclencher une régénération à la demande avec revalidatePath et revalidateTag depuis une route handler
+  - sait choisir entre SSG, ISR et SSR selon la fréquence de changement et le besoin de personnalisation
+prerequis: [00-prerequis-et-vue-ensemble, 01-protocole-http, 02-http2-http3, 03-en-tetes-http, 04-cache-control, 05-etag-validation-conditionnelle, 06-stale-while-revalidate, 07-cache-navigateur, 08-cdn, 09-cache-multi-couches, 10-ssr]
+next: 12-edge-rendering
+libs: [{ name: next, version: "15" }]
+tribuzen: pages publiques TribuZen (annuaire d'activités) pré-rendues en SSG, fiches activité en ISR revalidate, régénération on-demand à la publication d'une nouvelle activité
+last-reviewed: 2026-07
+---
 
-> **Objectif** : Comprendre les stratégies de rendu statique (SSG) et de regénération incrémentale (ISR), et savoir quand les utiliser pour maximiser les performances et la fraîcheur du contenu.
-> **Difficulté** : ⭐⭐⭐⭐
+# ISR & SSG — rendu statique et régénération incrémentale
+
+> **Outcomes — tu sauras FAIRE :** pré-rendre des pages au build avec `generateStaticParams`, activer l'ISR avec `export const revalidate`, déclencher une régénération à la demande avec `revalidatePath`/`revalidateTag`, et choisir entre SSG, ISR et SSR selon le contexte.
+> **Difficulté :** :star::star::star:
+>
+> **Portée :** ce module couvre **uniquement** le rendu **statique** (SSG) et sa **régénération incrémentale** (ISR) dans Next.js App Router. Le **SSR** (rendu à chaque requête) est le sujet du **module 10** — on s'appuie dessus sans le redétailler. Le rendu **à la périphérie** (Edge runtime, géo-distribution du calcul) est le sujet du **module 12**. Le mécanisme HTTP `stale-while-revalidate` en profondeur a été vu au **module 06** ; ici on montre comment l'ISR s'appuie dessus.
+
+## 1. Cas concret d'abord
+
+TribuZen a une page publique `/activites/[slug]` : la fiche d'une activité (rando famille, atelier poterie…). Il y en a 1 200, elles changent rarement (une ou deux fois par semaine), et elles doivent être **ultra-rapides** et **indexables** par Google. Un collègue a d'abord codé ça en SSR pur (rendu à chaque requête) :
+
+```tsx
+// app/activites/[slug]/page.tsx — VERSION SSR (module 10), ici inadaptée
+export const dynamic = 'force-dynamic' // rendu à CHAQUE requête
+
+export default async function ActivitePage({
+  params,
+}: {
+  params: Promise<{ slug: string }>
+}) {
+  const { slug } = await params
+  const activite = await fetch(`https://api.tribuzen.app/activites/${slug}`)
+    .then((r) => r.json())
+  return <article>{/* ... */}</article>
+}
+```
+
+Trois problèmes en production :
+
+1. **Lent pour rien.** Chaque visiteur déclenche un fetch API + un rendu serveur, alors que le contenu est **identique** pour tout le monde et ne change quasiment jamais. Le TTFB grimpe à 200-400 ms.
+2. **L'API prend toute la charge.** 1 200 fiches × milliers de visites = l'API et la base encaissent un trafic qu'un fichier statique aurait absorbé gratuitement.
+3. **Aucun cache partagé possible.** `force-dynamic` interdit au CDN de mettre en cache (cf. module 08) — chaque requête va jusqu'à l'origine.
+
+Le contenu est **public, identique pour tous, rarement modifié**. C'est le cas d'école du rendu **statique** : générer le HTML **une fois**, le servir depuis un CDN, et le **régénérer** seulement quand il change. Ce module te donne les deux outils Next.js pour ça — SSG (statique au build) et ISR (statique + régénération) — et le critère pour choisir.
 
 ---
 
-## 1. SSG — Static Site Génération
+## 2. Théorie complète, concise
 
-### 1.1 Le principe fondamental
+### 2.1 SSG — générer le HTML au build
 
-Le SSG (Static Site Génération) consiste à **générer toutes les pages HTML au moment du build**, avant même qu'un utilisateur ne visite le site. Le serveur ne fait que servir des fichiers statiques — exactement comme un serveur de fichiers classique.
+Le **SSG** (Static Site Generation) consiste à générer le HTML de chaque page **au moment du build**, avant qu'aucun utilisateur n'arrive. Le serveur ne calcule plus rien à la requête : il sert un fichier déjà prêt, cachable agressivement sur un CDN (`Cache-Control: public, max-age=..., immutable` — module 04).
 
-**Analogie** : Imagine une imprimerie. Au lieu d'écrire chaque lettre à la main quand quelqu'un la demandé (SSR), tu imprimes **toutes les lettres d'avance** et tu les ranges dans des casiers. Quand quelqu'un en veut une, tu la sors du casier instantanément.
+En App Router, une page est **statique par défaut** si elle n'utilise aucune API dynamique (`cookies()`, `headers()`, `searchParams`, ou un `fetch` en `no-store`). Pour une route dynamique `[slug]`, il faut dire à Next **quelles valeurs** pré-rendre.
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    PHASE DE BUILD                     │
-│                                                       │
-│   Données (API, DB, CMS)                             │
-│         │                                             │
-│         ▼                                             │
-│   ┌───────────┐    ┌──────────┐    ┌──────────────┐ │
-│   │ Templates  │───▶│  Build   │───▶│ Fichiers     │ │
-│   │ (JSX, etc) │    │ Process  │    │ HTML statiques│ │
-│   └───────────┘    └──────────┘    └──────────────┘ │
-│                                           │           │
-└───────────────────────────────────────────┼───────────┘
-                                            │
-                                            ▼
-                                    ┌──────────────┐
-                                    │     CDN      │
-                                    │  (distribué) │
-                                    └──────────────┘
-                                            │
-                              ┌─────────────┼─────────────┐
-                              ▼             ▼             ▼
-                          Utilisateur   Utilisateur   Utilisateur
-                          (Paris)       (Tokyo)       (New York)
-```
+### 2.2 `generateStaticParams()` — la liste des pages à pré-rendre
 
-### 1.2 Simuler un SSG avec Node.js
+`generateStaticParams` retourne un **tableau d'objets**, un par page à générer. Chaque clé de l'objet correspond au nom du segment dynamique.
 
-Voici comment construire un mini-système SSG avec `node:http` et `node:fs` :
-
-```js
-// ssg-builder.mjs — Phase de build : génère les pages statiques
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-
-// Simule un CMS ou une API qui fournit les données
-const articles = [
-  { slug: 'introduction-http', title: 'Introduction au HTTP', body: '<p>Le protocole HTTP...</p>', date: '2025-01-15' },
-  { slug: 'cache-headers',     title: 'Les en-têtes de cache', body: '<p>Cache-Control...</p>',    date: '2025-02-20' },
-  { slug: 'cdn-architecture',  title: 'Architecture CDN',      body: '<p>Un CDN distribue...</p>', date: '2025-03-10' },
-];
-
-const outputDir = './dist';
-
-function buildPage(article) {
-  return `<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <title>${article.title}</title>
-</head>
-<body>
-  <header><h1>${article.title}</h1></header>
-  <time datetime="${article.date}">${article.date}</time>
-  <main>${article.body}</main>
-  <footer><p>Généré statiquement au build</p></footer>
-</body>
-</html>`;
-}
-
-function buildIndex(articles) {
-  const links = articles
-    .map(a => `<li><a href="/articles/${a.slug}.html">${a.title}</a></li>`)
-    .join('\n    ');
-  return `<!DOCTYPE html>
-<html lang="fr">
-<head><meta charset="UTF-8"><title>Blog SSG</title></head>
-<body>
-  <h1>Articles</h1>
-  <ul>${links}</ul>
-</body>
-</html>`;
-}
-
-// --- Build ---
-console.time('Build SSG');
-
-if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
-if (!existsSync(join(outputDir, 'articles'))) mkdirSync(join(outputDir, 'articles'));
-
-// Générer chaque page d'article
-for (const article of articles) {
-  const html = buildPage(article);
-  writeFileSync(join(outputDir, 'articles', `${article.slug}.html`), html);
-  console.log(`  ✔ Généré : /articles/${article.slug}.html`);
-}
-
-// Générer la page d'index
-writeFileSync(join(outputDir, 'index.html'), buildIndex(articles));
-console.log('  ✔ Généré : /index.html');
-
-console.timeEnd('Build SSG');
-console.log(`\nTotal : ${articles.length + 1} pages générées.`);
-```
-
-### 1.3 Servir les fichiers statiques
-
-```js
-// ssg-server.mjs — Serveur statique ultra-simple
-import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { join, extname } from 'node:path';
-
-const DIST = './dist';
-const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript' };
-
-const server = createServer(async (req, res) => {
-  const url = req.url === '/' ? '/index.html' : req.url;
-  const filePath = join(DIST, url);
-  const ext = extname(filePath);
-
-  try {
-    const content = await readFile(filePath);
-
-    // Le fichier est statique → on peut le cacher agressivement
-    res.writeHead(200, {
-      'Content-Type': MIME[ext] || 'application/octet-stream',
-      'Cache-Control': 'public, max-age=31536000, immutable',
-      'X-Served-By': 'SSG-static',
-    });
-    res.end(content);
-  } catch {
-    res.writeHead(404, { 'Content-Type': 'text/html' });
-    res.end('<h1>404 — Page non trouvée</h1>');
-  }
-});
-
-server.listen(3000, () => console.log('SSG server → http://localhost:3000'));
-```
-
-### 1.4 Avantages et limites du SSG
-
-| Avantage | Détail |
-|----------|--------|
-| **Performance maximale** | Fichiers pré-générés, TTFB proche de zéro via CDN |
-| **Sécurité** | Pas de serveur dynamique exposé, pas de base de données en production |
-| **Coût réduit** | Hébergement sur un CDN statique (S3, Cloudflare Pages, Netlify) |
-| **SEO parfait** | HTML complet disponible immédiatement pour les crawlers |
-| **Scalabilité infinie** | Un CDN peut servir des millions de requêtes sans effort |
-
-| Limite | Détail |
-|--------|--------|
-| **Temps de build** | 10 000 pages = potentiellement 10-30 min de build |
-| **Contenu figé** | Les données sont celles du moment du build |
-| **Personnalisation** | Impossible de personnaliser le HTML par utilisateur (sans JS client) |
-| **Rebuild total** | Un changement = rebuilder toutes les pages (en SSG pur) |
-
----
-
-## 2. ISR — Incremental Static Regeneration
-
-### 2.1 Le concept : le meilleur des deux mondes
-
-L'ISR combine les avantages du SSG (pages statiques rapides) avec la fraîcheur du SSR (contenu à jour). Le principe :
-
-1. Au build, on génère les pages statiques (comme en SSG)
-2. En production, quand une page est demandée **après expiration**, on sert la version en cache **ET** on régénère la page en arrière-plan
-3. La prochaine requête reçoit la **version fraîche**
-
-**Analogie** : Imagine un restaurant avec un buffet. Les plats sont préparés d'avance (SSG). Mais le chef surveille : quand un plat commence à refroidir (TTL expiré), il en prépare un nouveau **en cuisine** (background revalidation) pendant que les clients se servent de l'ancien. Quand le nouveau plat est prêt, il remplace l'ancien sur le buffet.
-
-```
-Requête #1 (page fraîche, TTL non expiré)
-─────────────────────────────────────────
-Client ──GET /article/xyz──▶ CDN/Serveur
-                              │
-                              ├─ Cache HIT (TTL valide)
-                              │
-Client ◀── 200 + HTML ───────┘
-           (rapide, depuis le cache)
-
-
-Requête #2 (page périmée, TTL expiré — Stale-While-Revalidate)
-──────────────────────────────────────────────────────────────
-Client ──GET /article/xyz──▶ CDN/Serveur
-                              │
-                              ├─ Cache STALE (TTL expiré)
-                              │
-                              ├─ Sert la version stale immédiatement
-                              │      Client ◀── 200 + HTML (ancien)
-                              │
-                              └─ EN ARRIÈRE-PLAN :
-                                   │
-                                   ├─ Fetch les données fraîches
-                                   ├─ Regénère le HTML
-                                   └─ Met à jour le cache
-                                        │
-                                        ▼
-                                   Nouvelle version prête
-                                   pour la requête suivante
-
-
-Requête #3 (après régénération)
-────────────────────────────────
-Client ──GET /article/xyz──▶ CDN/Serveur
-                              │
-                              ├─ Cache HIT (nouvelle version)
-                              │
-Client ◀── 200 + HTML ───────┘
-           (rapide, contenu à jour)
-```
-
-### 2.2 Implémentation ISR avec Node.js
-
-```js
-// isr-server.mjs — Serveur ISR complet
-import { createServer } from 'node:http';
-
-// --- Stockage en mémoire (simule un cache CDN) ---
-const pageCache = new Map();  // slug → { html, generatedAt, revalidating }
-
-// --- Configuration ---
-const REVALIDATE_SECONDS = 60; // Regénérer toutes les 60 secondes
-
-// --- Simule un CMS / une API distante ---
-async function fetchArticleFromCMS(slug) {
-  // Simule un délai réseau de 500ms
-  await new Promise(resolve => setTimeout(resolve, 500));
-
-  const now = new Date().toISOString();
-  return {
-    slug,
-    title: `Article : ${slug}`,
-    body: `<p>Contenu récupéré depuis le CMS à ${now}</p>
-           <p>Ceci simule des données fraîches qui changent à chaque fetch.</p>`,
-    fetchedAt: now,
-  };
-}
-
-// --- Génère le HTML d'une page ---
-function renderPage(article) {
-  return `<!DOCTYPE html>
-<html lang="fr">
-<head><meta charset="UTF-8"><title>${article.title}</title></head>
-<body>
-  <h1>${article.title}</h1>
-  <main>${article.body}</main>
-  <footer>
-    <small>Données récupérées à : ${article.fetchedAt}</small><br>
-    <small>Page générée à : ${new Date().toISOString()}</small>
-  </footer>
-</body>
-</html>`;
-}
-
-// --- Logique ISR ---
-async function handleISR(slug) {
-  const cached = pageCache.get(slug);
-  const now = Date.now();
-
-  // Cas 1 : page dans le cache et TTL valide → servir depuis le cache
-  if (cached && (now - cached.generatedAt) < REVALIDATE_SECONDS * 1000) {
-    return { html: cached.html, status: 'HIT', age: Math.floor((now - cached.generatedAt) / 1000) };
-  }
-
-  // Cas 2 : page dans le cache mais TTL expiré → servir stale + revalider en arrière-plan
-  if (cached) {
-    // Lancer la revalidation en arrière-plan (fire-and-forget)
-    if (!cached.revalidating) {
-      cached.revalidating = true;
-      console.log(`[ISR] Revalidation en arrière-plan pour : ${slug}`);
-
-      // Ne pas attendre (await) — c'est le principe du background revalidation
-      fetchArticleFromCMS(slug)
-        .then(article => {
-          const html = renderPage(article);
-          pageCache.set(slug, { html, generatedAt: Date.now(), revalidating: false });
-          console.log(`[ISR] Revalidation terminée pour : ${slug}`);
-        })
-        .catch(err => {
-          console.error(`[ISR] Erreur de revalidation pour ${slug}:`, err);
-          cached.revalidating = false; // Permettre un nouveau essai
-        });
-    }
-
-    // Servir la version stale immédiatement
-    const age = Math.floor((now - cached.generatedAt) / 1000);
-    return { html: cached.html, status: 'STALE', age };
-  }
-
-  // Cas 3 : page jamais générée → générer pour la première fois (blocking)
-  console.log(`[ISR] Première génération (bloquante) pour : ${slug}`);
-  const article = await fetchArticleFromCMS(slug);
-  const html = renderPage(article);
-  pageCache.set(slug, { html, generatedAt: Date.now(), revalidating: false });
-  return { html, status: 'MISS', age: 0 };
-}
-
-// --- Serveur HTTP ---
-const server = createServer(async (req, res) => {
-  const match = req.url.match(/^\/articles\/([a-z0-9-]+)$/);
-
-  if (!match) {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(`<h1>ISR Demo</h1>
-      <p>Essaye : <a href="/articles/http-caching">/articles/http-caching</a></p>
-      <p>Recharge la page après ${REVALIDATE_SECONDS}s pour voir la revalidation.</p>`);
-    return;
-  }
-
-  const slug = match[1];
-  const start = Date.now();
-
-  try {
-    const { html, status, age } = await handleISR(slug);
-    const duration = Date.now() - start;
-
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'X-Cache-Status': status,       // HIT, STALE, ou MISS
-      'X-Cache-Age': String(age),
-      'X-Response-Time': `${duration}ms`,
-      // En-tête stale-while-revalidate pour les CDN qui le supportent
-      'Cache-Control': `public, s-maxage=${REVALIDATE_SECONDS}, stale-while-revalidate=${REVALIDATE_SECONDS * 10}`,
-    });
-    res.end(html);
-
-    console.log(`[${status}] ${slug} — age=${age}s — ${duration}ms`);
-  } catch (err) {
-    res.writeHead(500, { 'Content-Type': 'text/plain' });
-    res.end('Erreur serveur');
-    console.error(err);
-  }
-});
-
-server.listen(3000, () => {
-  console.log('Serveur ISR → http://localhost:3000');
-  console.log(`TTL de revalidation : ${REVALIDATE_SECONDS}s`);
-});
-```
-
-### 2.3 On-Demand Revalidation
-
-Parfois, tu ne veux pas attendre l'expiration du TTL. Par exemple, quand un éditeur publie un article dans le CMS, tu veux que la page soit régénérée **immédiatement**. C'est la **revalidation à la demandé** (on-demand revalidation).
-
-```js
-// on-demand-revalidation.mjs — Webhook de revalidation
-import { createServer } from 'node:http';
-
-const pageCache = new Map();
-const REVALIDATE_SECRET = 'mon-secret-webhook-2025';
-
-async function fetchFromCMS(slug) {
-  await new Promise(r => setTimeout(r, 300));
-  return {
-    slug,
-    title: `Article : ${slug}`,
-    body: `<p>Mis à jour à ${new Date().toISOString()}</p>`,
-  };
-}
-
-function renderHTML(article) {
-  return `<!DOCTYPE html>
-<html><head><title>${article.title}</title></head>
-<body><h1>${article.title}</h1><main>${article.body}</main></body></html>`;
-}
-
-const server = createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-
-  // ─── Endpoint de revalidation (appelé par le webhook du CMS) ───
-  if (req.method === 'POST' && url.pathname === '/api/revalidate') {
-    let body = '';
-    for await (const chunk of req) body += chunk;
-
-    let payload;
-    try {
-      payload = JSON.parse(body);
-    } catch {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'JSON invalide' }));
-      return;
-    }
-
-    // Vérifier le secret (sécurité)
-    if (payload.secret !== REVALIDATE_SECRET) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Secret invalide' }));
-      return;
-    }
-
-    const { slug } = payload;
-    if (!slug) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'slug manquant' }));
-      return;
-    }
-
-    console.log(`[REVALIDATE] Revalidation on-demand déclenchée pour : ${slug}`);
-
-    // Regénérer la page immédiatement
-    const article = await fetchFromCMS(slug);
-    const html = renderHTML(article);
-    pageCache.set(slug, { html, generatedAt: Date.now() });
-
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ revalidated: true, slug, at: new Date().toISOString() }));
-    return;
-  }
-
-  // ─── Servir les pages statiques ───
-  const match = url.pathname.match(/^\/articles\/([a-z0-9-]+)$/);
-  if (match) {
-    const slug = match[1];
-    const cached = pageCache.get(slug);
-
-    if (cached) {
-      res.writeHead(200, {
-        'Content-Type': 'text/html',
-        'X-Cache': 'HIT',
-      });
-      res.end(cached.html);
-    } else {
-      // Première génération
-      const article = await fetchFromCMS(slug);
-      const html = renderHTML(article);
-      pageCache.set(slug, { html, generatedAt: Date.now() });
-      res.writeHead(200, { 'Content-Type': 'text/html', 'X-Cache': 'MISS' });
-      res.end(html);
-    }
-    return;
-  }
-
-  res.writeHead(404);
-  res.end('Not Found');
-});
-
-server.listen(3000, () => {
-  console.log('Serveur avec on-demand revalidation → http://localhost:3000');
-  console.log('\nPour revalider manuellement :');
-  console.log(`curl -X POST http://localhost:3000/api/revalidate \\`);
-  console.log(`  -H "Content-Type: application/json" \\`);
-  console.log(`  -d '{"secret":"${REVALIDATE_SECRET}","slug":"http-caching"}'`);
-});
-```
-
-**Flow de la revalidation on-demand :**
-
-```
-┌──────────┐    Webhook     ┌──────────────┐    Revalidate    ┌──────────┐
-│   CMS    │───────────────▶│  /api/       │────────────────▶│  Cache   │
-│ (éditeur │   POST + slug  │  revalidate  │   fetch + render │  (Map)   │
-│  publie) │                └──────────────┘                  └──────────┘
-└──────────┘                                                       │
-                                                                   ▼
-                                                          Page mise à jour
-                                                          immédiatement
-```
-
----
-
-## 3. Comparaison SSR vs SSG vs ISR
-
-### 3.1 Tableau comparatif
-
-| Critère | SSR | SSG | ISR |
-|---------|-----|-----|-----|
-| **Quand le HTML est généré** | À chaque requête | Au build uniquement | Au build + regénération |
-| **TTFB** | Lent (100-500ms) | Ultra-rapide (<50ms) | Ultra-rapide (cache) |
-| **Fraîcheur des données** | Temps réel | Figé au build | Configurable (TTL) |
-| **Charge serveur** | Élevée | Nulle | Minimale |
-| **Personnalisation** | Complète | Aucune (sans JS) | Aucune (sans JS) |
-| **SEO** | Excellent | Excellent | Excellent |
-| **Temps de build** | N/A | Long si beaucoup de pages | Court (incrémental) |
-| **Coût d'hébergement** | Élevé (serveurs) | Très bas (CDN statique) | Modéré |
-| **Invalidation** | Automatique | Rebuild complet | TTL ou on-demand |
-
-### 3.2 Matrice de décision
-
-```
-                    Données changent souvent ?
-                    │
-            ┌───────┴───────┐
-            │               │
-           OUI             NON
-            │               │
-     Personnalisation    ┌──┴──┐
-     par utilisateur ?   │     │
-            │            SSG   ISR
-     ┌──────┴──────┐     (blog  (si tu veux
-     │             │     docs)   quand même
-    OUI           NON            rafraîchir)
-     │             │
-    SSR           ISR
-  (dashboard,   (e-commerce,
-   profil)       actualités)
-```
-
-### 3.3 Quand utiliser quoi — exemples concrets
-
-| Type de site | Stratégie | Pourquoi |
-|-------------|-----------|----------|
-| Documentation technique | **SSG** | Contenu stable, build rapide |
-| Blog personnel | **SSG** | Peu de pages, contenu rarement mis à jour |
-| Site e-commerce (fiches produit) | **ISR** (60s) | Milliers de pages, prix changent |
-| Dashboard utilisateur | **SSR** | Données personnalisées en temps réel |
-| Site d'actualités | **ISR** (10-30s) | Fraîcheur importante, beaucoup de pages |
-| Landing page marketing | **SSG** | Contenu figé, performance maximale |
-| Réseau social (feed) | **SSR** | Contenu personnalisé en temps réel |
-
----
-
-## 4. Le rôle du cache HTTP dans le SSG et l'ISR
-
-### 4.1 En-têtes optimaux par stratégie
-
-```js
-// headers-par-strategie.mjs — Démonstration des en-têtes recommandés
-import { createServer } from 'node:http';
-
-function getOptimalHeaders(strategy) {
-  switch (strategy) {
-    case 'ssg':
-      return {
-        // Page SSG : ne change jamais entre deux builds
-        // → cache agressif avec immutable
-        'Cache-Control': 'public, max-age=31536000, immutable',
-        'CDN-Cache-Control': 'public, max-age=31536000',
-      };
-
-    case 'ssg-with-etag':
-      return {
-        // SSG mais on veut pouvoir invalider au prochain build
-        // → max-age court + ETag pour revalidation
-        'Cache-Control': 'public, max-age=3600, must-revalidate',
-        'ETag': `"build-${Date.now()}"`,
-      };
-
-    case 'isr':
-      return {
-        // ISR : fraîcheur configurée par le TTL
-        // → s-maxage pour le CDN + stale-while-revalidate
-        'Cache-Control': 'public, max-age=0, s-maxage=60, stale-while-revalidate=600',
-        'CDN-Cache-Control': 'public, max-age=60, stale-while-revalidate=600',
-      };
-
-    case 'ssr':
-      return {
-        // SSR dynamique : ne pas cacher (ou très peu)
-        'Cache-Control': 'private, no-cache, no-store, must-revalidate',
-        'Vary': 'Cookie, Authorization',
-      };
-
-    default:
-      return { 'Cache-Control': 'no-store' };
-  }
-}
-
-const server = createServer((req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-  const strategy = url.searchParams.get('strategy') || 'ssg';
-
-  const headers = getOptimalHeaders(strategy);
-
-  res.writeHead(200, {
-    'Content-Type': 'text/html; charset=utf-8',
-    ...headers,
-    'X-Rendering-Strategy': strategy.toUpperCase(),
-  });
-
-  const headersList = Object.entries(headers)
-    .map(([k, v]) => `<tr><td><code>${k}</code></td><td><code>${v}</code></td></tr>`)
-    .join('');
-
-  res.end(`<!DOCTYPE html>
-<html lang="fr">
-<head><meta charset="UTF-8"><title>En-têtes ${strategy}</title></head>
-<body>
-  <h1>Stratégie : ${strategy.toUpperCase()}</h1>
-  <table border="1" cellpadding="8">
-    <tr><th>En-tête</th><th>Valeur</th></tr>
-    ${headersList}
-  </table>
-  <p>Essaye : ?strategy=ssg | ssg-with-etag | isr | ssr</p>
-</body>
-</html>`);
-});
-
-server.listen(3000, () => console.log('Headers demo → http://localhost:3000?strategy=isr'));
-```
-
-### 4.2 Interaction CDN et ISR
-
-```
-Requête utilisateur
-       │
-       ▼
-┌──────────────┐   Cache HIT    ┌──────────────┐
-│   CDN Edge   │◀──────────────▶│  Cache CDN   │
-│   (Paris)    │                │  s-maxage=60  │
-└──────┬───────┘                └──────────────┘
-       │
-       │ Cache MISS ou STALE
-       │
-       ▼
-┌──────────────┐   Regénère     ┌──────────────┐
-│  Serveur     │──────────────▶│  CMS / API   │
-│  Origine     │  (background)  │  (données)   │
-└──────────────┘                └──────────────┘
-       │
-       │ Nouvelle page HTML
-       │
-       ▼
-  Met à jour le cache CDN
-  pour les prochaines requêtes
-```
-
----
-
-## 5. Patterns avancés
-
-### 5.1 Fallback : blocking vs non-blocking
-
-Quand une page n'a **jamais été générée** (ex. un nouvel article), deux stratégies sont possibles :
-
-```js
-// fallback-strategies.mjs
-import { createServer } from 'node:http';
-
-const cache = new Map();
-
-async function generatePage(slug) {
-  await new Promise(r => setTimeout(r, 800)); // Simule le rendu
-  return `<html><body><h1>${slug}</h1><p>Généré à ${new Date().toISOString()}</p></body></html>`;
-}
-
-const server = createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-  const slug = url.pathname.slice(1) || 'index';
-  const mode = url.searchParams.get('fallback') || 'blocking';
-
-  if (cache.has(slug)) {
-    res.writeHead(200, { 'Content-Type': 'text/html', 'X-Fallback': 'none (cached)' });
-    res.end(cache.get(slug));
-    return;
-  }
-
-  if (mode === 'blocking') {
-    // BLOCKING : l'utilisateur attend que la page soit générée
-    // + Avantage : le HTML est complet au premier rendu
-    // - Inconvénient : TTFB élevé pour la première requête
-    const html = await generatePage(slug);
-    cache.set(slug, html);
-    res.writeHead(200, { 'Content-Type': 'text/html', 'X-Fallback': 'blocking' });
-    res.end(html);
-  } else {
-    // NON-BLOCKING : on sert un squelette immédiatement
-    // + Avantage : TTFB rapide
-    // - Inconvénient : le contenu apparaît après un chargement côté client
-    res.writeHead(200, { 'Content-Type': 'text/html', 'X-Fallback': 'skeleton' });
-    res.end(`<html><body>
-      <h1>Chargement...</h1>
-      <script>
-        // En vrai, on ferait un fetch API ici pour charger le contenu
-        setTimeout(() => {
-          document.querySelector('h1').textContent = '${slug}';
-          document.body.innerHTML += '<p>Contenu chargé côté client</p>';
-        }, 1000);
-      </script>
-    </body></html>`);
-
-    // Générer en arrière-plan pour les prochaines requêtes
-    generatePage(slug).then(html => cache.set(slug, html));
-  }
-});
-
-server.listen(3000, () => console.log('Fallback demo → http://localhost:3000/mon-article?fallback=blocking'));
-```
-
-### 5.2 Cache tags pour invalidation ciblée
-
-```js
-// cache-tags.mjs — Invalidation par tags (comme Fastly, Cloudflare)
-import { createServer } from 'node:http';
-
-// Cache avec support de tags
-const cache = new Map();      // url → { html, tags, generatedAt }
-const tagIndex = new Map();   // tag → Set<url>
-
-function cacheSet(url, html, tags) {
-  cache.set(url, { html, tags, generatedAt: Date.now() });
-  for (const tag of tags) {
-    if (!tagIndex.has(tag)) tagIndex.set(tag, new Set());
-    tagIndex.get(tag).add(url);
-  }
-}
-
-function purgeByTag(tag) {
-  const urls = tagIndex.get(tag);
-  if (!urls) return 0;
-  let count = 0;
-  for (const url of urls) {
-    cache.delete(url);
-    count++;
-  }
-  tagIndex.delete(tag);
-  return count;
-}
-
-const server = createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-
-  // Endpoint de purge par tag
-  if (req.method === 'PURGE') {
-    const tag = url.searchParams.get('tag');
-    const purged = purgeByTag(tag);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ purged, tag }));
-    return;
-  }
-
-  // Servir depuis le cache ou générer
-  const cached = cache.get(url.pathname);
-  if (cached) {
-    res.writeHead(200, {
-      'Content-Type': 'text/html',
-      'X-Cache': 'HIT',
-      'X-Cache-Tags': cached.tags.join(', '),
-    });
-    res.end(cached.html);
-    return;
-  }
-
-  // Simuler une page produit avec des tags
-  const html = `<html><body><h1>Produit ${url.pathname}</h1>
-    <p>Généré à ${new Date().toISOString()}</p></body></html>`;
-  const tags = ['products', `product:${url.pathname}`, 'catalog'];
-
-  cacheSet(url.pathname, html, tags);
-
-  res.writeHead(200, {
-    'Content-Type': 'text/html',
-    'X-Cache': 'MISS',
-    'X-Cache-Tags': tags.join(', '),
-    'Cache-Tag': tags.join(', '),  // En-tête standard Cloudflare/Fastly
-  });
-  res.end(html);
-});
-
-server.listen(3000, () => {
-  console.log('Cache Tags demo → http://localhost:3000/chaussures-running');
-  console.log('\nPurger tous les produits :');
-  console.log('curl -X PURGE "http://localhost:3000?tag=products"');
-});
-```
-
----
-
-## Points clés
-
-1. **SSG** génère toutes les pages au build — performance maximale mais contenu figé.
-2. **ISR** combine SSG + revalidation en arrière-plan — pages statiques avec fraîcheur configurable.
-3. Le flow ISR : servir la page en cache → si périmée, déclencher une régénération background → la prochaine requête reçoit la version fraîche.
-4. La **revalidation on-demand** permet de régénérer une page immédiatement via un webhook (publication CMS, etc.).
-5. L'en-tête `stale-while-revalidate` est le mécanisme HTTP natif qui correspond au comportement ISR.
-6. Le choix SSR/SSG/ISR dépend de deux axes : la **fréquence de changement** des données et le **besoin de personnalisation**.
-7. Les **cache tags** permettent une invalidation ciblée : purger toutes les pages d'une catégorie sans tout reconstruire.
-8. En SSG pur, on peut utiliser `Cache-Control: immutable` car les fichiers ne changent jamais entre deux builds.
-
----
-
----
-
-## Pour aller plus loin
-
-- [RFC 5861 — stale-while-revalidate](https://httpwg.org/specs/rfc5861.html)
-- [Patterns ISR dans Next.js](https://nextjs.org/docs/basic-features/data-fetching/incremental-static-regeneration)
-- [Cloudflare Cache Tags](https://developers.cloudflare.com/cache/how-to/purge-cache/purge-by-tags/)
-- [Vercel ISR documentation](https://vercel.com/docs/concepts/incremental-static-regeneration)
-
----
-
-## Si tu es perdu
-
-Pense à un **journal quotidien** :
-
-- **SSG** = tu imprimes le journal **une fois le matin** et tu distribues les mêmes exemplaires toute la journée. Rapide, pas cher, mais les nouvelles de l'après-midi ne sont pas dedans.
-- **SSR** = tu **réécris le journal à chaque fois** que quelqu'un le demandé. Toujours à jour, mais ça coûte cher et c'est lent.
-- **ISR** = tu imprimes le journal le matin, mais **toutes les heures**, un journaliste vérifie s'il y a des changements importants. Si oui, il imprime une **édition mise à jour**. Les gens qui arrivent entre deux éditions reçoivent la dernière version imprimée — pas parfaitement à jour, mais bien assez.
-
-La **revalidation on-demand**, c'est quand le rédacteur en chef appelle directement l'imprimerie pour dire : « Imprime une édition spéciale MAINTENANT, il y à un scoop ! »
-
----
-
-## Défi
-
-### Construis un serveur ISR avec statistiques
-
-Crée un serveur Node.js qui :
-
-1. Sert des pages avec un cache ISR (TTL configurable via query string `?ttl=30`)
-2. Compte les HIT, MISS et STALE pour chaque page
-3. Expose un endpoint `/stats` qui affiche les statistiques en JSON
-4. Expose un endpoint `POST /purge/:slug` pour la revalidation on-demand
-5. Ajoute un en-tête `X-Cache-Generation` qui s'incrémente à chaque régénération
-
-**Bonus** : Ajoute un endpoint `/dashboard` qui affiche les statistiques sous forme de tableau HTML.
-
-<details>
-<summary>Voir la solution</summary>
-
-```js
-// defi-11-isr-stats.mjs
-import { createServer } from 'node:http';
-
-const cache = new Map();   // slug → { html, generatedAt, generation }
-const stats = new Map();   // slug → { hit: 0, miss: 0, stale: 0 }
-
-async function fetchData(slug) {
-  await new Promise(r => setTimeout(r, 200));
-  return { slug, title: slug, content: `Données à ${new Date().toISOString()}` };
-}
-
-function render(data, generation) {
-  return `<html><body>
-    <h1>${data.title}</h1>
-    <p>${data.content}</p>
-    <small>Génération #${generation}</small>
-  </body></html>`;
-}
-
-function incrStat(slug, type) {
-  if (!stats.has(slug)) stats.set(slug, { hit: 0, miss: 0, stale: 0 });
-  stats.get(slug)[type]++;
-}
-
-const server = createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-
-  // Dashboard HTML
-  if (url.pathname === '/dashboard') {
-    const rows = [...stats.entries()]
-      .map(([slug, s]) => `<tr><td>${slug}</td><td>${s.hit}</td><td>${s.miss}</td><td>${s.stale}</td></tr>`)
-      .join('');
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(`<html><body><h1>Dashboard ISR</h1>
-      <table border="1" cellpadding="4">
-        <tr><th>Slug</th><th>HIT</th><th>MISS</th><th>STALE</th></tr>
-        ${rows || '<tr><td colspan="4">Aucune donnée</td></tr>'}
-      </table></body></html>`);
-    return;
-  }
-
-  // Stats JSON
-  if (url.pathname === '/stats') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(Object.fromEntries(stats), null, 2));
-    return;
-  }
-
-  // Purge on-demand
-  if (req.method === 'POST' && url.pathname.startsWith('/purge/')) {
-    const slug = url.pathname.slice(7);
-    cache.delete(slug);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ purged: slug }));
-    return;
-  }
-
-  // ISR page
-  const slug = url.pathname.slice(1) || 'index';
-  const ttl = parseInt(url.searchParams.get('ttl') || '60', 10) * 1000;
-  const now = Date.now();
-  const cached = cache.get(slug);
-
-  if (cached && (now - cached.generatedAt) < ttl) {
-    incrStat(slug, 'hit');
-    res.writeHead(200, {
-      'Content-Type': 'text/html',
-      'X-Cache': 'HIT',
-      'X-Cache-Generation': String(cached.generation),
-    });
-    res.end(cached.html);
-    return;
-  }
-
-  if (cached) {
-    incrStat(slug, 'stale');
-    // Background revalidation
-    if (!cached.revalidating) {
-      cached.revalidating = true;
-      fetchData(slug).then(data => {
-        const gen = cached.generation + 1;
-        cache.set(slug, {
-          html: render(data, gen),
-          generatedAt: Date.now(),
-          generation: gen,
-          revalidating: false,
-        });
-      });
-    }
-    res.writeHead(200, {
-      'Content-Type': 'text/html',
-      'X-Cache': 'STALE',
-      'X-Cache-Generation': String(cached.generation),
-    });
-    res.end(cached.html);
-    return;
-  }
-
-  // MISS — première génération
-  incrStat(slug, 'miss');
-  const data = await fetchData(slug);
-  const generation = 1;
-  const html = render(data, generation);
-  cache.set(slug, { html, generatedAt: now, generation, revalidating: false });
-  res.writeHead(200, {
-    'Content-Type': 'text/html',
-    'X-Cache': 'MISS',
-    'X-Cache-Generation': '1',
-  });
-  res.end(html);
-});
-
-server.listen(3000, () => {
-  console.log('ISR Stats → http://localhost:3000/mon-article?ttl=10');
-  console.log('Dashboard → http://localhost:3000/dashboard');
-  console.log('Stats    → http://localhost:3000/stats');
-});
-```
-
-</details>
-
----
-
-## En pratique — Configuration Next.js
-
-Next.js (App Router) implémente nativement SSG et ISR. Voici les configurations les plus courantes.
-
-### SSG — Génération statique au build
-
-```typescript
-// app/blog/[slug]/page.tsx — SSG pur
-// POURQUOI : generateStaticParams dit à Next.js de pré-rendre ces pages au build.
-// Elles seront servies comme des fichiers statiques (TTFB minimal).
-
+```tsx
+// app/activites/[slug]/page.tsx
 export async function generateStaticParams() {
-  const posts = await fetch('https://api.example.com/posts').then(r => r.json());
-  return posts.map((post) => ({ slug: post.slug }));
-}
+  const activites = await fetch('https://api.tribuzen.app/activites')
+    .then((r) => r.json())
 
-// dynamicParams = false → retourne 404 pour les slugs non pré-rendus
-export const dynamicParams = false;
-
-export default async function BlogPost({ params }) {
-  const post = await fetch(`https://api.example.com/posts/${params.slug}`);
-  return <article>{/* ... */}</article>;
+  // Une entrée par page : { slug } remplit le segment [slug]
+  return activites.map((a: { slug: string }) => ({ slug: a.slug }))
 }
 ```
 
-### ISR — Régénération incrémentale
+| Route | Type de retour attendu |
+|---|---|
+| `/activites/[slug]` | `{ slug: string }[]` |
+| `/activites/[cat]/[slug]` | `{ cat: string, slug: string }[]` |
+| `/activites/[...path]` (catch-all) | `{ path: string[] }[]` |
 
-```typescript
-// app/products/[id]/page.tsx — ISR
-// POURQUOI : revalidate = 3600 signifie que la page est re-générée en background
-// toutes les heures maximum. L'utilisateur reçoit toujours la version cachée
-// instantanément, comme du SSG.
+Au `next build`, Next appelle cette fonction, puis génère une page HTML pour **chaque** entrée retournée. `generateStaticParams` remplace le `getStaticPaths` de l'ancien Pages Router.
 
-export const revalidate = 3600; // ISR : revalider toutes les heures
+> **Next 15 — `params` est asynchrone.** Depuis Next 15, `params` (et `searchParams`) sont des **`Promise`** : dans le composant de page il faut `const { slug } = await params`. C'est un changement de signature par rapport à Next 14 (où `params` était un objet synchrone).
 
-export default async function ProductPage({ params }) {
-  // Ce fetch hérite du revalidate de la page
-  const product = await fetch(`https://api.example.com/products/${params.id}`);
-  return <div>{/* ... */}</div>;
+### 2.3 `dynamicParams` — que faire des slugs non pré-générés ?
+
+Que se passe-t-il si un visiteur demande `/activites/nouvelle-rando` alors que ce slug n'était **pas** dans `generateStaticParams` (créé après le build) ? C'est `dynamicParams` qui tranche :
+
+```tsx
+export const dynamicParams = true  // DÉFAUT : génère la page à la volée au 1er accès (puis la cache)
+// export const dynamicParams = false // les slugs non listés → 404
+```
+
+- `true` (défaut) : les slugs inconnus sont rendus **à la demande** au premier accès, puis mis en cache comme les autres. Idéal quand le catalogue grandit sans rebuild.
+- `false` : seuls les slugs de `generateStaticParams` existent ; tout le reste → **404**. Utile pour un ensemble fermé (pages légales, docs versionnées).
+
+### 2.4 ISR — `export const revalidate` (régénération temporelle)
+
+Le SSG pur a une limite : le contenu est **figé au build**. Si un prix change, il faut re-builder tout le site. L'**ISR** (Incremental Static Regeneration) lève ça : la page reste statique, mais Next la **régénère en arrière-plan** après un délai que tu fixes.
+
+```tsx
+// app/activites/[slug]/page.tsx
+export const revalidate = 3600 // secondes : régénérer au plus toutes les heures
+
+export default async function ActivitePage({
+  params,
+}: {
+  params: Promise<{ slug: string }>
+}) {
+  const { slug } = await params
+  const activite = await fetch(`https://api.tribuzen.app/activites/${slug}`)
+    .then((r) => r.json())
+  return <article>{/* ... */}</article>
 }
 ```
 
-### On-demand revalidation — Webhook
+Valeurs de `export const revalidate` :
 
-```typescript
-// app/api/revalidate/route.ts — Revalidation à la demande
-// POURQUOI : Quand le CMS publie un nouveau contenu, il appelle ce webhook
-// pour forcer la re-génération immédiate des pages concernées.
+| Valeur | Comportement | Équivalent HTTP (module 04/06) |
+|---|---|---|
+| `false` (défaut) | SSG pur — jamais revalidé, figé jusqu'au prochain build | `immutable` |
+| `0` | force le rendu dynamique (SSR) — pas de cache | `no-store` |
+| `N` (nombre) | ISR — la page est régénérée au plus toutes les `N` s | `s-maxage=N, stale-while-revalidate` |
 
-import { revalidatePath, revalidateTag } from 'next/cache';
+Le **flux ISR** reprend exactement le `stale-while-revalidate` du module 06 :
 
-export async function POST(request) {
-  const { path, tag, secret } = await request.json();
+```
+Requête avant expiration (age < revalidate)
+  → sert la page en cache, instantanée (comme du SSG)
 
-  // Vérifier le secret pour éviter les appels non autorisés
-  if (secret !== process.env.REVALIDATION_SECRET) {
-    return Response.json({ error: 'Invalid secret' }, { status: 401 });
+Première requête APRÈS expiration (age >= revalidate)
+  → sert quand même la version en cache (STALE) immédiatement
+  → EN ARRIÈRE-PLAN : refetch + re-render, met à jour le cache
+
+Requête suivante
+  → sert la nouvelle version (fraîche)
+```
+
+Personne n'attend jamais la régénération : l'utilisateur reçoit toujours du statique. La fraîcheur est **au plus** de `N` secondes de retard. On peut aussi poser `revalidate` **par fetch** (plus granulaire que la page entière) :
+
+```tsx
+const activite = await fetch(url, { next: { revalidate: 3600 } })
+```
+
+### 2.5 Régénération à la demande — `revalidatePath` & `revalidateTag`
+
+Le délai temporel a un défaut : si un éditeur publie une correction **maintenant**, il faut attendre l'expiration. La **régénération à la demande** (on-demand) force l'invalidation immédiatement, typiquement via un **webhook** appelé par le CMS. Deux fonctions, importées de `next/cache`, utilisables dans une **route handler** ou une **server action** (jamais côté client) :
+
+- `revalidatePath(path, type?)` — invalide **un chemin** précis.
+- `revalidateTag(tag)` — invalide **toutes les pages** dont un `fetch` porte ce tag.
+
+```tsx
+// app/api/revalidate/route.ts — webhook appelé par le CMS TribuZen
+import { revalidatePath, revalidateTag } from 'next/cache'
+import type { NextRequest } from 'next/server'
+
+export async function POST(request: NextRequest) {
+  const secret = request.nextUrl.searchParams.get('secret')
+  if (secret !== process.env.REVALIDATE_SECRET) {
+    return Response.json({ message: 'Secret invalide' }, { status: 401 })
   }
 
-  // Revalider par chemin OU par tag
-  if (path) revalidatePath(path);       // Ex: revalidatePath('/blog/mon-article')
-  if (tag) revalidateTag(tag);           // Ex: revalidateTag('blog-posts')
+  const { slug, tag } = await request.json()
 
-  return Response.json({ revalidated: true, now: Date.now() });
+  if (slug) revalidatePath(`/activites/${slug}`) // une fiche précise
+  if (tag) revalidateTag(tag)                     // ex. 'activites' → toutes les listes
+
+  return Response.json({ revalidated: true, now: Date.now() })
 }
 ```
 
-### Cache tags avec fetch
+Pour que `revalidateTag('activites')` ait un effet, il faut **taguer** les fetch concernés :
 
-```typescript
-// Taguer les requêtes fetch pour la revalidation ciblée
-const posts = await fetch('https://api.example.com/posts', {
-  next: { tags: ['blog-posts'] }  // Ce fetch sera invalidé par revalidateTag('blog-posts')
-});
-
-const product = await fetch(`https://api.example.com/products/${id}`, {
-  next: {
-    revalidate: 60,               // ISR au niveau fetch (60s)
-    tags: [`product-${id}`]       // Tag pour invalidation ciblée
-  }
-});
+```tsx
+// Ce fetch sera invalidé par revalidateTag('activites')
+const activites = await fetch('https://api.tribuzen.app/activites', {
+  next: { tags: ['activites'] },
+})
 ```
 
-### Comparaison des options Next.js
+`revalidatePath` cible une **URL** (« régénère cette fiche »), `revalidateTag` cible une **donnée logique** (« toute page qui affiche la liste des activités »). On les combine souvent : à la publication d'une activité, on `revalidatePath` sa fiche **et** on `revalidateTag('activites')` pour rafraîchir la page de liste.
 
-| Configuration | Comportement | Équivalent |
-|--------------|-------------|------------|
-| `revalidate = 0` ou `dynamic = 'force-dynamic'` | SSR pur (pas de cache) | `Cache-Control: no-store` |
-| `revalidate = false` (défaut) | SSG pur (build-time) | `Cache-Control: immutable` |
-| `revalidate = 3600` | ISR (re-générer toutes les heures) | `Cache-Control: s-maxage=3600, stale-while-revalidate` |
-| `revalidatePath('/blog')` | On-demand revalidation | Purge CDN par URL |
-| `revalidateTag('posts')` | Revalidation par tag | Purge CDN par surrogate key |
+> **Signatures — Next 15 vs Next 16.** Dans ce module (Next **15**), la forme est `revalidateTag('activites')` (un seul argument). Next **16** a introduit une seconde signature `revalidateTag(tag, 'max')` (sémantique stale-while-revalidate explicite) et une fonction `updateTag` pour l'expiration immédiate ; la forme à un argument y devient dépréciée. En Next 15, tiens-t'en à l'appel simple. <!-- FLAG-DOC: le passage exact Next15→16 de revalidateTag (1 arg → 2 args + updateTag) est daté des docs v16 ; revérifier à la montée de version du repo. -->
+
+### 2.6 `params` async, un rappel qui casse les builds
+
+Puisque `params` est une `Promise` en Next 15, l'oublier casse le typage **et** le runtime :
+
+```tsx
+// ❌ params traité en objet synchrone (habitude Next 14)
+export default function Page({ params }: { params: { slug: string } }) {
+  return <h1>{params.slug}</h1> // slug undefined / erreur de type
+}
+
+// ✅ Next 15 : await
+export default async function Page({
+  params,
+}: {
+  params: Promise<{ slug: string }>
+}) {
+  const { slug } = await params
+  return <h1>{slug}</h1>
+}
+```
+
+### 2.7 SSG vs ISR vs SSR — le critère de choix
+
+Deux axes décident : **fréquence de changement** du contenu et **besoin de personnalisation** par utilisateur.
+
+| | SSG | ISR | SSR |
+|---|---|---|---|
+| HTML généré | au build | au build + régénéré | à chaque requête |
+| Fraîcheur | figée au build | ≤ `revalidate` s de retard | temps réel |
+| Personnalisation / user | non (identique pour tous) | non | oui (cookies, session) |
+| Charge origine | nulle | minime (régénérations rares) | forte |
+| Config Next | pas de `revalidate` (ou `false`) | `revalidate = N` | `revalidate = 0` / `force-dynamic` |
+
+Règle rapide :
+- **Contenu public, identique, quasi figé** (docs, mentions légales, landing) → **SSG**.
+- **Contenu public, identique, qui évolue** (fiche produit, article, annuaire) → **ISR**.
+- **Contenu personnalisé / temps réel** (dashboard, panier, feed) → **SSR** (module 10).
 
 ---
 
-## Navigation
+## 3. Worked examples
 
-| Précédent | Suivant |
-|:---------:|:-------:|
-| [Module 10 — SSR et Cache](./10-ssr.md) | [Module 12 — Edge Rendering](./12-edge-rendering.md) |
+### Exemple 1 — La fiche activité TribuZen : de SSR à ISR
+
+On corrige le cas concret du §1. Le contenu est public et rarement modifié → ISR avec régénération toutes les heures, plus pré-génération des fiches au build.
+
+```tsx
+// app/activites/[slug]/page.tsx — VERSION ISR
+import { notFound } from 'next/navigation'
+
+// 1) ISR : la page est régénérée au plus toutes les heures.
+//    L'utilisateur reçoit TOUJOURS du HTML statique (instantané).
+export const revalidate = 3600
+
+// 2) Pré-générer les fiches connues au build (SSG des 1 200 slugs).
+export async function generateStaticParams() {
+  const activites = await fetch('https://api.tribuzen.app/activites', {
+    next: { tags: ['activites'] }, // taggé pour l'invalidation on-demand
+  }).then((r) => r.json())
+
+  return activites.map((a: { slug: string }) => ({ slug: a.slug }))
+}
+
+// 3) Un slug créé APRÈS le build sera rendu à la volée au 1er accès, puis caché.
+export const dynamicParams = true
+
+export default async function ActivitePage({
+  params,
+}: {
+  params: Promise<{ slug: string }> // Next 15 : params est une Promise
+}) {
+  const { slug } = await params
+
+  const res = await fetch(`https://api.tribuzen.app/activites/${slug}`, {
+    next: { tags: ['activites', `activite:${slug}`] },
+  })
+  if (!res.ok) notFound() // 404 propre pour un slug inexistant
+
+  const activite = await res.json()
+
+  return (
+    <article>
+      <h1>{activite.titre}</h1>
+      <p>{activite.description}</p>
+    </article>
+  )
+}
+```
+
+**Pourquoi c'est correct :**
+- `revalidate = 3600` : les visiteurs reçoivent du statique (TTFB minimal, cachable CDN via `s-maxage`), et le contenu a au plus 1 h de retard — acceptable pour une fiche qui change une fois par semaine.
+- `generateStaticParams` pré-rend les 1 200 fiches au build → premier accès déjà instantané, pas de « cold render ».
+- Les `fetch` sont **taggés** (`activites`, `activite:${slug}`) → on pourra les invalider ciblément (exemple 2).
+- L'API n'encaisse plus qu'une régénération par fiche et par heure au lieu d'un hit par visite : la charge du §1 disparaît.
+
+### Exemple 2 — Publication immédiate via webhook on-demand
+
+L'éditrice corrige une faute sur la fiche `rando-lac-blanc` et veut la voir en ligne **tout de suite**, sans attendre l'heure d'ISR. Le CMS appelle la route handler de revalidation.
+
+```tsx
+// app/api/revalidate/route.ts
+import { revalidatePath, revalidateTag } from 'next/cache'
+import type { NextRequest } from 'next/server'
+
+export async function POST(request: NextRequest) {
+  // Sécurité : un secret partagé empêche n'importe qui de forcer des régénérations
+  const secret = request.nextUrl.searchParams.get('secret')
+  if (secret !== process.env.REVALIDATE_SECRET) {
+    return Response.json({ message: 'Non autorisé' }, { status: 401 })
+  }
+
+  const { slug } = await request.json()
+  if (!slug) {
+    return Response.json({ message: 'slug manquant' }, { status: 400 })
+  }
+
+  // Invalide la fiche précise ET la page de liste (qui utilise le tag 'activites')
+  revalidatePath(`/activites/${slug}`)
+  revalidateTag('activites')
+
+  return Response.json({ revalidated: true, slug, now: Date.now() })
+}
+```
+
+Test au terminal (le vrai outil du lab) :
+
+```bash
+curl -X POST "http://localhost:3000/api/revalidate?secret=dev-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"slug":"rando-lac-blanc"}'
+# → {"revalidated":true,"slug":"rando-lac-blanc","now":...}
+```
+
+Au **prochain accès** à `/activites/rando-lac-blanc`, Next sert la version fraîche : le cache a été marqué invalide, la page est régénérée. Note bien : `revalidatePath`/`revalidateTag` **marquent** l'invalidation ; la régénération effective a lieu **à la visite suivante**, pas au moment de l'appel — ça évite un pic de 1 200 régénérations simultanées.
 
 ---
 
-<!-- parcours-recommande -->
+## 4. Pièges & misconceptions
 
-::: tip Parcours recommandé
-1. **Screencast** : [screencast 11 isr ssg](../screencasts/screencast-11-isr-ssg.md)
-2. **Lab** : [lab-11-isr-implementation](../labs/lab-11-isr-implementation/README)
-3. **Visualisation** : [SSR & Hydration](../visualizations/ssr-hydration.html)
-4. **Quiz** : [quiz 11 isr](../quizzes/quiz-11-isr.html)
-:::
+### PIÈGE #1 — Croire que l'ISR régénère « toutes les N secondes »
+
+`revalidate = 60` **ne** lance **pas** un rebuild toutes les 60 s en tâche de fond. La régénération n'est déclenchée que par une **requête qui arrive après expiration**. Une page jamais visitée n'est jamais régénérée. `revalidate` est un **âge maximum toléré**, pas un cron.
+
+```
+❌ « revalidate = 60 → la page se reconstruit chaque minute »
+✅ « après 60 s, la PROCHAINE requête sert le stale et déclenche la régénération »
+```
+
+### PIÈGE #2 — Oublier que `params` est une `Promise` (Next 15)
+
+```tsx
+// ❌ habitude Next 14 : casse en Next 15
+export default function Page({ params }: { params: { slug: string } }) {
+  return <h1>{params.slug}</h1>
+}
+```
+
+En Next 15, `params` est asynchrone : il faut `async` + `await params`. Sinon erreur de type et `slug` indéfini. Même chose pour `searchParams`.
+
+### PIÈGE #3 — `revalidateTag` sans avoir tagué les `fetch`
+
+```tsx
+// ❌ le fetch n'est pas taggé…
+const data = await fetch(url)
+// …donc cet appel ne fait rien d'utile :
+revalidateTag('activites')
+```
+
+`revalidateTag(tag)` n'invalide que les `fetch` déclarés avec `next: { tags: [tag] }`. Sans tag posé côté fetch, l'appel est un no-op silencieux. **Règle :** tag au fetch **et** tag à l'invalidation, exactement la même chaîne (sensible à la casse).
+
+### PIÈGE #4 — Confondre `revalidatePath` et `revalidateTag`
+
+```tsx
+revalidatePath('/activites/rando')  // UNE url précise
+revalidateTag('activites')          // TOUTE page qui lit la donnée taguée 'activites'
+```
+
+`revalidatePath` cible une **route** ; `revalidateTag` cible une **donnée logique** qui peut apparaître sur plusieurs pages (fiche + liste + page d'accueil). Invalider seulement la fiche laisse la **page de liste** périmée. Pour une cohérence complète, combine les deux.
+
+### PIÈGE #5 — Rendre dynamique une page qu'on croyait statique
+
+Utiliser `cookies()`, `headers()`, `searchParams`, ou un `fetch` en `{ cache: 'no-store' }` **bascule** la page en rendu dynamique (SSR) — le `generateStaticParams` et le `revalidate` deviennent inopérants pour la partie dynamique.
+
+```tsx
+// ❌ ce headers() rend TOUTE la page dynamique, l'ISR ne s'applique plus
+import { headers } from 'next/headers'
+const h = await headers()
+```
+
+**Règle :** garde les pages statiques **pures** (aucune API par-requête). Si tu as besoin d'un bout personnalisé, isole-le dans un Client Component ou un segment dynamique dédié, sans contaminer la page statique.
+
+### PIÈGE #6 — Mettre en SSG un contenu personnalisé
+
+```tsx
+// ❌ dashboard utilisateur en SSG/ISR : tout le monde verrait les mêmes données !
+export const revalidate = 60 // sur /dashboard → fuite entre utilisateurs
+```
+
+SSG et ISR produisent **une seule** version partagée par tous. Une page qui dépend de l'utilisateur (session, panier, solde) **doit** être en SSR (module 10). L'ISR est réservé au contenu **public et identique pour tous**.
+
+---
+
+## 5. Ancrage TribuZen
+
+TribuZen sépare nettement ses trois familles de pages selon les critères du §2.7 :
+
+| Page | Stratégie | Config Next 15 | Raison |
+|---|---|---|---|
+| `/` accueil marketing, `/cgu`, `/a-propos` | **SSG** | pas de `revalidate` | Contenu figé → statique pur, cache CDN maximal |
+| `/activites` (liste), `/activites/[slug]` (fiche) | **ISR** | `revalidate = 3600` + `generateStaticParams` | Public, identique, évolue lentement → statique + fraîcheur ≤ 1 h |
+| `/app/dashboard`, `/app/famille/[id]` | **SSR** | `revalidate = 0` / `force-dynamic` | Données personnelles par utilisateur → module 10 |
+
+Chaîne de régénération de l'annuaire :
+- **Build** : `generateStaticParams` pré-rend les fiches connues ; les `fetch` de l'annuaire portent le tag `activites`.
+- **Temporel** : `revalidate = 3600` garantit qu'une modif API apparaît en ≤ 1 h même sans webhook.
+- **On-demand** : quand un animateur publie une activité dans le back-office, celui-ci appelle `POST /api/revalidate` → `revalidatePath('/activites/<slug>')` + `revalidateTag('activites')` → la fiche **et** la liste sont fraîches au prochain accès, sans rebuild.
+
+Fichiers cibles dans `smaurier/tribuzen` :
+```
+tribuzen/
+  web/app/activites/[slug]/page.tsx      # revalidate + generateStaticParams (ISR)
+  web/app/activites/page.tsx             # liste taguée 'activites'
+  web/app/api/revalidate/route.ts        # webhook on-demand (secret + revalidatePath/Tag)
+  web/app/(marketing)/cgu/page.tsx       # SSG pur (aucun revalidate)
+```
+
+---
+
+## 6. Points clés
+
+1. **SSG** = HTML généré au build, servi comme un fichier statique (cache CDN agressif, TTFB minimal). Statique **par défaut** en App Router tant qu'aucune API dynamique n'est utilisée.
+2. `generateStaticParams()` retourne un tableau `{ segment: valeur }[]` : la liste des pages d'une route dynamique à pré-rendre au build.
+3. **ISR** = SSG + régénération. `export const revalidate = N` fixe l'âge maximum ; la régénération suit le flux `stale-while-revalidate` (module 06) et n'est déclenchée que par une requête post-expiration.
+4. `revalidate` : `false` = SSG figé, `0` = SSR dynamique, `N` = ISR ; posable aussi par `fetch` via `next: { revalidate }`.
+5. `dynamicParams` : `true` (défaut) rend à la volée les slugs non pré-générés ; `false` les renvoie en 404.
+6. **On-demand** : `revalidatePath(path)` invalide une URL, `revalidateTag(tag)` invalide toute donnée taguée (`fetch(..., { next: { tags } })`) — depuis `next/cache`, en route handler ou server action.
+7. En **Next 15**, `params`/`searchParams` sont des `Promise` → `async` + `await params`.
+8. Choix : contenu figé → SSG ; public et évolutif → ISR ; personnalisé/temps réel → SSR (module 10).
+
+---
+
+## 7. Seeds Anki
+
+```
+Quelle est la différence entre SSG et ISR dans Next App Router ?|SSG génère le HTML au build et le fige jusqu'au prochain build (pas de revalidate, ou revalidate=false). ISR ajoute une régénération : export const revalidate=N régénère la page en arrière-plan après N secondes, en gardant le comportement statique (l'utilisateur reçoit toujours du HTML pré-rendu).
+À quoi sert generateStaticParams() et que retourne-t-elle ?|Elle liste les pages d'une route dynamique à pré-rendre au build. Elle retourne un tableau d'objets, un par page, dont les clés sont les noms des segments : pour /activites/[slug], retourne { slug: string }[]. Next génère une page HTML par entrée au next build. Remplace getStaticPaths du Pages Router.
+Que fait export const revalidate = 3600 et quand la régénération a-t-elle lieu ?|C'est de l'ISR : la page est considérée fraîche 1 h. La régénération n'est PAS un cron — elle est déclenchée par la première requête arrivant APRÈS expiration : cette requête reçoit la version stale, la régénération se fait en arrière-plan, la requête suivante reçoit la version fraîche (stale-while-revalidate).
+Quelle est la différence entre revalidatePath et revalidateTag ?|revalidatePath(path) invalide une URL précise (ex. /activites/rando). revalidateTag(tag) invalide toutes les pages dont un fetch porte ce tag (fetch(url, { next: { tags: [tag] } })). L'un cible une route, l'autre une donnée logique présente sur plusieurs pages. On les combine pour une cohérence complète (fiche + liste).
+Pourquoi revalidateTag('activites') peut-il ne rien faire ?|Parce qu'il n'invalide que les fetch tagués avec next: { tags: ['activites'] }. Sans tag posé côté fetch, l'appel est un no-op. Il faut le même tag (sensible à la casse) au fetch ET à l'invalidation.
+Quelle nouveauté de signature params impose Next 15 ?|params (et searchParams) sont désormais des Promise : dans le composant de page il faut une fonction async et const { slug } = await params. En Next 14, params était un objet synchrone.
+Quand choisir SSG, ISR ou SSR ?|SSG pour du contenu public figé (docs, mentions légales). ISR pour du contenu public identique pour tous mais qui évolue (fiche produit, annuaire). SSR pour du contenu personnalisé ou temps réel (dashboard, panier), car SSG/ISR produisent une seule version partagée par tous les utilisateurs.
+Que fait dynamicParams pour un slug absent de generateStaticParams ?|dynamicParams=true (défaut) rend la page à la volée au premier accès puis la met en cache. dynamicParams=false renvoie une 404 pour tout slug non pré-généré (ensemble fermé).
+```
+
+---
+
+## Pont vers le lab
+
+> Lab associé : `11-http-caching/labs/lab-11-isr-ssg/README.md`. Construire une app Next.js 15 minimale avec une route ISR (`generateStaticParams` + `export const revalidate`) et un endpoint `POST /api/revalidate`, puis **observer** au terminal la régénération : `next build` (voir les pages marquées statiques/ISR), navigation, puis `curl` sur l'endpoint de revalidation pour forcer une régénération à la demande.

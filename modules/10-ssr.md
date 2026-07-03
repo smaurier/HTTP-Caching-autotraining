@@ -1,1361 +1,475 @@
-# Module 10 — SSR (Server-Side Rendering) et Cache
-
-> **Objectif** : Comprendre le cycle de rendu SSR, le concept d'hydration, le streaming SSR, la gestion du state initial et les stratégies de cache pour le HTML généré cote serveur.
-> **Difficulte** : :star::star::star::star:
-
+---
+titre: SSR et cache de rendu — HTML généré à la requête, mis en cache
+cours: 11-http-caching
+notions: ["rendu à la requête (SSR)", "CSR vs SSR", TTFB, FCP, "hydration (en survol)", "uncanny valley", "cache de page entière", "cache de fragment", "s-maxage au CDN pour le HTML SSR", "Vary sur le HTML", "Next.js App Router fetch cache", "cache: force-cache", "cache: no-store", "next.revalidate", "route segment dynamic/revalidate", "Full Route Cache", "Data Cache", "pages perso -> private/no-store"]
+outcomes:
+  - sait expliquer ce que le SSR change au TTFB et au FCP par rapport au CSR
+  - sait décider quand un HTML rendu à la requête est cachable (page entière vs fragment)
+  - sait poser les bons en-têtes de cache sur du HTML SSR (s-maxage au CDN, Vary, private/no-store pour le perso)
+  - sait piloter le cache de rendu de Next.js 15 App Router (fetch force-cache/no-store, next.revalidate, route segment)
+prerequis: [00-prerequis-et-vue-ensemble, 01-protocole-http, 02-http2-http3, 03-en-tetes-http, 04-cache-control, 05-etag-validation-conditionnelle, 06-stale-while-revalidate, 07-cache-navigateur, 08-cdn, 09-cache-multi-couches]
+next: 11-isr-ssg
+libs: [{ name: next, version: "15" }]
+tribuzen: rendu SSR de la page publique d'une sortie TribuZen — HTML caché au CDN (s-maxage), en-tête du membre connecté laissé hors cache (private)
+last-reviewed: 2026-07
 ---
 
-> **SSR cross-cours** : le SSR est aussi couvert dans 03-Vue module 04 (SSR/Hydration, Nuxt 3) et 08-React module 06 (Next.js App Router, Server Components). Ici l'angle est protocole HTTP : cache du HTML généré, streaming, CDN, stratégies de revalidation.
+# SSR et cache de rendu — HTML généré à la requête, mis en cache
 
-> **⚠️ Les modules 10, 11 et 12 passent en niveau expert.** C'est normal que ça soit plus difficile — SSR, ISR et Edge Rendering sont des sujets avances. Tu as toutes les bases (modules 00-09). Si un module te bloque, note ce que tu ne comprends pas et passe au suivant — ces concepts se clarifient quand tu les vois en pratique dans les cours Vue/React/Angular.
+> **Outcomes — tu sauras FAIRE :** expliquer ce que le SSR change au TTFB/FCP face au CSR, décider quand un HTML rendu à la requête est cachable, poser les bons en-têtes de cache sur du HTML SSR, piloter le cache de rendu de Next.js 15 App Router.
+> **Difficulté :** :star::star::star:
+>
+> **Portée :** ce module couvre **uniquement** le SSR (HTML rendu **à la requête**) et la **mise en cache de ce rendu**. Le **pré-rendu au build** (SSG) et sa **régénération incrémentale** (ISR) sont le sujet du **module 11**. Le rendu **à la frontière** (edge) est le **module 12**. Le **streaming** du HTML (Suspense, envoi par morceaux) est le **module 13**. L'`hydration` est traitée **en survol** ici — sa mécanique profonde relève des cours de framework (Vue, React).
 
-## 1. Pourquoi SSR ?
+## 1. Cas concret d'abord
 
-### 1.1 Le problème du CSR (Client-Side Rendering)
-
-Avec une SPA classique (React, Vue, Angular), le HTML initial est presque vide :
+TribuZen a une page publique par sortie : `/sorties/pique-nique-juin`. Elle doit être **partageable** (aperçu réseaux sociaux, référencée par Google) et **rapide à afficher**. Aujourd'hui elle est en **CSR** (SPA Vite classique). Ce que le serveur envoie :
 
 ```html
-<!-- Ce que le serveur envoie -->
+<!-- Ce que reçoit Google et le premier octet de l'utilisateur -->
 <!DOCTYPE html>
 <html>
-<head><title>Mon App</title></head>
-<body>
-  <div id="root"></div>
-  <script src="/app.a1b2c3.js"></script>
-</body>
+  <head><title>TribuZen</title></head>
+  <body>
+    <div id="app"></div>                         <!-- vide -->
+    <script type="module" src="/assets/app.9f8e7d6c.js"></script>
+  </body>
 </html>
 ```
 
-```
-Timeline CSR :
-==============
+Trois problèmes, le même jour :
 
-  |--- HTML vide (1 Ko) ---|--- Telecharge JS (200 Ko) ---|--- Execute JS ---|--- Fetch API ---|--- Affichage ---|
-  0                        200ms                          600ms              800ms             1200ms             1500ms
+1. **SEO nul.** Le robot Google reçoit un `<div id="app">` **vide**. Le titre de la sortie, la date, le lieu ne sont dans le HTML **qu'après** exécution du JavaScript. La page ne remonte pas dans les résultats.
+2. **Aperçu social cassé.** Quand on colle le lien dans un message, le crawler qui génère la vignette ne lit **que** le HTML initial → pas de titre, pas d'image. Vignette blanche.
+3. **FCP lent.** L'utilisateur voit un écran blanc tant que `app.9f8e7d6c.js` (200 Ko) n'est pas téléchargé **puis** que l'API n'a pas répondu.
 
-  TTFB: 200ms    FCP: 1200ms (tard !)    TTI: 1500ms
-
-  L'utilisateur voit un ecran blanc pendant 1.2 secondes.
-  Google Bot voit un <div> vide (mauvais pour le SEO).
-```
-
-### 1.2 La solution SSR
-
-Le serveur exécuté le JavaScript, généré le HTML complet et l'envoie :
-
-```html
-<!-- Ce que le serveur envoie avec SSR -->
-<!DOCTYPE html>
-<html>
-<head><title>Mon App</title></head>
-<body>
-  <div id="root">
-    <header><nav>...</nav></header>
-    <main>
-      <h1>Produit : Clavier mecanique</h1>
-      <p>Prix : 89.99 EUR</p>
-      <button disabled>Ajouter au panier</button>
-    </main>
-  </div>
-  <script src="/app.a1b2c3.js"></script>
-</body>
-</html>
-```
-
-```
-Timeline SSR :
-==============
-
-  |--- Serveur genere HTML ---|--- HTML complet (15 Ko) ---|--- Affichage ---|--- JS charge ---|--- Hydration ---|
-  0                          150ms                        250ms             300ms             700ms              900ms
-
-  TTFB: 250ms (un peu plus)    FCP: 300ms (tres tot !)    TTI: 900ms
-
-  L'utilisateur voit du contenu apres 300ms.
-  Google Bot voit tout le HTML (excellent pour le SEO).
-```
-
-### 1.3 Comparaison CSR vs SSR
-
-| Critere | CSR | SSR |
-|---------|-----|-----|
-| TTFB | Rapide (~100ms) | Plus lent (~250ms) |
-| FCP (First Contentful Paint) | Lent (~1200ms) | Rapide (~300ms) |
-| TTI (Time to Interactive) | ~1500ms | ~900ms |
-| SEO | Mauvais | Excellent |
-| Complexite serveur | Faible | Elevee |
-| Charge serveur | Faible | Elevee (CPU) |
-| Perception utilisateur | Ecran blanc | Contenu immediat |
-
-### 1.4 Les 3 avantages clés du SSR
-
-```
-1. SEO : Google Bot recoit du HTML complet, pas un <div> vide
-2. TTFB percu : l'utilisateur voit du contenu des le premier octet
-3. Performance percue : meme si le TTI est similaire, l'utilisateur
-   "voit" quelque chose immediatement --> meilleure UX
-```
+La réponse : **rendre le HTML côté serveur** (SSR) pour que le premier octet contienne déjà le contenu, **puis mettre ce HTML en cache** (c'est une page publique, identique pour tous) pour ne pas payer le rendu à chaque visite. Ce module te donne les deux : le rendu à la requête **et** son cache.
 
 ---
 
-## 2. Cycle SSR : requête -> render -> HTML -> envoi -> hydration
+## 2. Théorie complète, concise
 
-### 2.1 Le cycle complet
+### 2.1 CSR vs SSR : qui assemble le HTML, et quand
+
+| | CSR (SPA) | SSR |
+|---|---|---|
+| Qui rend le HTML | le **navigateur**, après téléchargement du JS | le **serveur**, à chaque requête |
+| Premier octet | HTML **vide** (`<div id="app">`) | HTML **complet** (contenu déjà là) |
+| SEO / aperçu social | mauvais (robot voit du vide) | bon (robot voit le contenu) |
+| TTFB | rapide (fichier statique) | plus lent (le serveur doit rendre) |
+| FCP | tardif (JS + fetch avant tout pixel) | précoce (contenu dans le 1ᵉʳ octet) |
+| Charge serveur | faible | plus élevée (CPU de rendu) → **d'où le cache** |
+
+Le SSR **déplace** le rendu : du navigateur (une fois par utilisateur, tard) vers le serveur (une fois par requête, tôt). Le coût déplacé est un coût **CPU serveur** — que le cache de rendu vient précisément amortir.
+
+### 2.2 TTFB et FCP : les deux métriques que le SSR bouge
+
+- **TTFB** (Time To First Byte) : temps entre le début de la navigation et l'arrivée du **premier octet** de la réponse. Le SSR **augmente** le TTFB brut (le serveur prend le temps de rendre) — sauf si le HTML est **caché**, auquel cas le TTFB s'effondre (on sert un HTML déjà prêt). Cible web.dev : **TTFB ≤ 0,8 s** ; au-delà de **1,8 s** c'est mauvais.
+- **FCP** (First Contentful Paint) : instant où le premier contenu réel s'affiche. Le SSR **améliore** le FCP : le contenu est dans le premier octet, le navigateur peut peindre **avant** de télécharger et exécuter le JS.
+
+Le compromis SSR se résume ainsi : **on accepte un TTFB un peu plus élevé pour un FCP nettement plus tôt** — et le cache de rendu supprime le surcoût de TTFB.
+
+### 2.3 Hydration — en survol
+
+Le HTML SSR est d'abord **statique** : visible mais inerte (les boutons ne réagissent pas). Le JavaScript client se charge ensuite et **hydrate** la page : il rattache les gestionnaires d'événements au HTML existant pour le rendre interactif.
 
 ```
-Client                     Serveur                       Client (apres reception)
-------                     -------                       -----------------------
-
-GET /produit/42 --------->
-                           1. Recevoir la requete
-                           2. Fetch des donnees (DB/API)
-                           3. Render composants -> HTML
-                           4. Serialiser le state
-                           5. Assembler le HTML final
-                  <------- 6. Envoyer la reponse
-
-7. Afficher le HTML (statique, non interactif)
-8. Telecharger le JS
-9. Executer le JS
-10. Hydration : attacher les event listeners
-11. Page interactive !
+[HTML SSR reçu]  →  [contenu visible mais inerte]  →  [JS chargé + hydraté = interactif]
+     FCP tôt              "uncanny valley"                    interactif
 ```
 
-### 2.2 Implementation SSR avec `node:http`
+Entre l'affichage et la fin de l'hydration, la page **ressemble** à une page interactive mais ne l'est pas encore : c'est l'**« uncanny valley »**. Un clic dans cette fenêtre ne fait rien. La mécanique fine de l'hydration (partielle, progressive, resumability) appartient aux cours de framework — **retiens seulement** : SSR = HTML tôt, interactivité un peu plus tard.
 
-```js
-import { createServer } from 'node:http';
+### 2.4 Le cœur du module : quand un HTML SSR est-il cachable ?
 
-// ---- Simuler un "framework" SSR minimal ----
+Un rendu à la requête coûte du CPU. Si **deux requêtes produisent le même HTML**, on ne veut le rendre qu'**une fois** et resservir la copie. La question n'est donc pas « SSR ou pas », mais « ce HTML dépend-il de l'utilisateur ? ».
 
-// Nos "composants" (fonctions qui retournent du HTML)
-function Header() {
-  return `
-    <header style="background:#1a1a2e;color:white;padding:1rem;">
-      <nav>
-        <a href="/" style="color:white;">Accueil</a> |
-        <a href="/produits" style="color:white;">Produits</a>
-      </nav>
-    </header>`;
+| Type de page SSR | Même HTML pour tous ? | Cachable ? | Stratégie |
+|---|---|---|---|
+| Page publique (sortie, article) | oui | **oui, fortement** | `s-maxage` long au CDN |
+| Liste/recherche publique | oui, par jeu de paramètres | **oui** | cache par variante (`Vary`/query) |
+| Page semi-perso (contenu public + en-tête « Bonjour Alice ») | non en l'état | **partiellement** | cache de **fragment** |
+| Dashboard, panier | non (propre à l'utilisateur) | **non** | `private, no-store` |
+
+### 2.5 Cache de page entière (full-page)
+
+Quand tout le HTML est public, on le traite comme n'importe quelle réponse cachable (revois les modules 04, 08, 09) : le **CDN** garde le HTML rendu, l'origine ne rend qu'au premier hit.
+
+```http
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Cache-Control: public, s-maxage=300, max-age=0
+Vary: Accept-Encoding
+```
+
+- `s-maxage=300` : le CDN sert le HTML rendu pendant 5 min sans toucher l'origine → TTFB quasi statique pour l'utilisateur, CPU de rendu divisé par le nombre de hits.
+- `max-age=0` : le navigateur, lui, revalide (le HTML porte l'état de la page, on ne veut pas qu'il fige une version).
+- On peut ajouter `stale-while-revalidate=60` (module 06) pour que le CDN serve du légèrement périmé pendant qu'il régénère en arrière-plan.
+
+### 2.6 `Vary` sur le HTML SSR — une entrée de cache par variante
+
+Le HTML rendu peut légitimement différer selon quelques axes. Le CDN a besoin de `Vary` pour ne pas servir la mauvaise variante :
+
+```http
+Vary: Accept-Encoding, Accept-Language
+```
+
+- `Accept-Encoding` : variante compressée vs non compressée.
+- `Accept-Language` : HTML en français vs anglais → deux entrées de cache légitimes.
+
+Deux `Vary` **interdits** sur du HTML SSR public : `Vary: *` (désactive tout cache) et surtout **`Vary: Cookie`** — une entrée de cache **par utilisateur**, donc aucun partage : le cache ne sert plus à rien. Si la page dépend d'un cookie de session, ce n'est plus une page cachable en cache **partagé** (voir 2.8).
+
+### 2.7 Cache de fragment — la page mi-publique mi-personnalisée
+
+Le cas le plus fréquent : la page de sortie est **publique à 90 %**, mais l'en-tête affiche « Bonjour Alice » et son avatar. On ne veut ni tout jeter, ni cacher le nom d'Alice pour le servir à Bob.
+
+Trois stratégies, de la plus simple à la plus fine :
+
+1. **Sortir le perso du HTML SSR.** Le serveur rend un en-tête **générique** (« Se connecter »). Le nom/avatar est injecté **côté client** après hydration, via un appel API `private`. Le HTML SSR redevient 100 % public → cachable en page entière. **C'est la stratégie par défaut recommandée.**
+2. **Cache de fragment.** Le HTML public (corps de la sortie) est caché ; le fragment perso (`GET /api/me/greeting`, `private, no-store`) est demandé à part et assemblé. Le corps profite du `s-maxage`, le fragment reste hors cache partagé.
+3. **Edge-Side Includes (ESI).** Le CDN assemble lui-même `<esi:include src="/fragment/greeting"/>` : corps public caché, fragment perso non caché. Puissant mais spécifique au CDN — à ne poser que si le volume le justifie.
+
+Fil conducteur : **on ne cache que ce qui est identique pour tous ; on isole le personnel dans un fragment `private`.**
+
+### 2.8 Ce qu'on ne cache jamais (rappel appliqué au HTML)
+
+Un HTML SSR qui contient une donnée propre à l'utilisateur ne doit **jamais** entrer dans un cache **partagé** :
+
+```http
+Cache-Control: private, no-store
+```
+
+- Dashboard, panier, page de compte → `private` (jamais de CDN) + souvent `no-store` (rien sur le disque).
+- Un **token CSRF** dans le HTML → catastrophe s'il est mis en cache partagé : il serait servi à un autre utilisateur. `no-store` obligatoire.
+
+### 2.9 SSR piloté par framework : Next.js 15 App Router
+
+Écrire un serveur SSR à la main (section 3) éclaire le mécanisme, mais en pratique un framework le fait. Next.js (App Router) est le cas de référence en entretien. **Point crucial vérifié sur la doc officielle (Next 15) :**
+
+> **Par défaut, dans Next 15, `fetch()` n'est PAS caché.** Une route qui `fetch` sans option est rendue **dynamiquement** (SSR à chaque requête). Ceci a changé par rapport à Next 13/14 où `fetch` était caché par défaut. **On active le cache explicitement.**
+
+Les trois leviers de cache de rendu :
+
+**a) Au niveau du `fetch` (Data Cache) :**
+
+```tsx
+// Rendu dynamique (défaut Next 15) : pas de cache, SSR à chaque requête
+const live = await fetch('https://api.tribuzen.app/sorties/42')
+
+// Opt-in cache : ce fetch est mémorisé (Data Cache)
+const stable = await fetch('https://api.tribuzen.app/sorties/42', {
+  cache: 'force-cache',
+})
+
+// Cache avec revalidation temporelle : re-fetch au plus toutes les 60 s
+const revalidated = await fetch('https://api.tribuzen.app/sorties/42', {
+  next: { revalidate: 60 },
+})
+
+// Jamais caché, explicite
+const always = await fetch('https://api.tribuzen.app/me', {
+  cache: 'no-store',
+})
+```
+
+**b) Au niveau du segment de route (Full Route Cache) :**
+
+```tsx
+// app/sorties/[slug]/page.tsx
+export const dynamic = 'force-dynamic'  // toujours SSR à la requête, aucune mise en cache
+// ou
+export const revalidate = 60            // le rendu de la route est caché et revalidé toutes les 60 s
+```
+
+- **Full Route Cache** : Next peut cacher le **résultat rendu** (HTML + payload RSC) d'une route.
+- **Data Cache** : Next cache le **résultat des `fetch`** opt-in, indépendamment de la route.
+
+**c) Dynamique automatique.** Lire une **API de requête** — `cookies()`, `headers()`, `searchParams` — bascule la route en **dynamique** : elle est rendue à chaque requête, jamais cachée. C'est l'équivalent Next de notre règle 2.8 : dès que le rendu dépend de l'utilisateur, pas de cache.
+
+> **Frontière de portée :** `next: { revalidate: N }` est un cache **de rendu avec péremption** — proche parent de l'ISR. Ici on l'utilise comme **cache d'un rendu à la requête**. La **régénération incrémentale de pages pré-rendues au build** (`generateStaticParams`, `revalidateTag`/`revalidatePath` sur du statique) est traitée au **module 11**.
+
+---
+
+## 3. Worked examples
+
+### Exemple 1 — Un serveur SSR minimal, avec et sans cache de rendu (Express)
+
+On rend la page de sortie TribuZen côté serveur, puis on ajoute un cache de rendu en mémoire pour ne pas re-rendre à chaque hit. C'est le vrai outil du lab.
+
+```typescript
+// server.ts — SSR + cache de rendu (Express, TypeScript, lancé avec tsx)
+import express from 'express';
+
+const app = express();
+
+// "Base de données" simulée + latence de fetch réaliste
+async function fetchSortie(slug: string) {
+  await new Promise((r) => setTimeout(r, 120)); // 120 ms : fetch API/DB
+  const data: Record<string, { titre: string; date: string; lieu: string }> = {
+    'pique-nique-juin': { titre: 'Pique-nique de juin', date: '2026-06-21', lieu: 'Parc de la Tête d\'Or' },
+  };
+  return data[slug] ?? null;
 }
 
-function ProductCard(product) {
-  return `
-    <article style="border:1px solid #ddd;padding:1rem;margin:1rem;border-radius:8px;">
-      <h2>${escapeHtml(product.nom)}</h2>
-      <p style="font-size:1.5rem;color:#e94560;">${product.prix.toFixed(2)} EUR</p>
-      <p>Stock : ${product.stock} unites</p>
-      <button
-        data-product-id="${product.id}"
-        data-action="add-to-cart"
-        style="padding:0.5rem 1rem;background:#0f3460;color:white;border:none;cursor:pointer;">
-        Ajouter au panier
-      </button>
-    </article>`;
+function escapeHtml(s: string) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function Layout(title, content, initialState) {
+// Rendu = fetch + assemblage du HTML complet (le contenu est DANS le 1er octet)
+async function renderSortie(slug: string): Promise<string | null> {
+  const s = await fetchSortie(slug);
+  if (!s) return null;
   return `<!DOCTYPE html>
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)}</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 0; }
-    main { max-width: 800px; margin: 0 auto; padding: 1rem; }
-  </style>
+  <title>${escapeHtml(s.titre)} — TribuZen</title>
+  <meta property="og:title" content="${escapeHtml(s.titre)}">
 </head>
 <body>
-  <div id="root">
-    ${Header()}
-    <main>${content}</main>
-  </div>
-  <script>
-    // State initial serialise pour l'hydration
-    window.__INITIAL_STATE__ = ${JSON.stringify(initialState)};
-  </script>
-  <script src="/client.js" defer></script>
-</body>
-</html>`;
-}
-
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-// ---- "Base de donnees" ----
-const products = [
-  { id: 1, nom: 'Clavier mecanique', prix: 89.99, stock: 15 },
-  { id: 2, nom: 'Souris ergonomique', prix: 49.99, stock: 23 },
-  { id: 3, nom: 'Ecran 4K 27"', prix: 349.99, stock: 7 },
-  { id: 4, nom: 'Casque sans fil', prix: 129.99, stock: 42 }
-];
-
-async function fetchProduct(id) {
-  // Simuler la latence DB
-  await new Promise(r => setTimeout(r, 20));
-  return products.find(p => p.id === Number(id)) || null;
-}
-
-async function fetchAllProducts() {
-  await new Promise(r => setTimeout(r, 30));
-  return products;
-}
-
-// ---- Serveur SSR ----
-const server = createServer(async (req, res) => {
-  const start = Date.now();
-
-  // ---- Script client (hydration) ----
-  if (req.url === '/client.js') {
-    res.writeHead(200, {
-      'Content-Type': 'application/javascript',
-      'Cache-Control': 'max-age=31536000, immutable'
-    });
-    res.end(`
-      // ---- Hydration ----
-      console.log('Hydration demarree');
-      console.log('State initial:', window.__INITIAL_STATE__);
-
-      // Attacher les event listeners sur les boutons existants
-      document.querySelectorAll('[data-action="add-to-cart"]').forEach(button => {
-        button.addEventListener('click', (e) => {
-          const productId = e.target.dataset.productId;
-          alert('Produit ' + productId + ' ajoute au panier !');
-          console.log('Ajout au panier:', productId);
-        });
-        // Le bouton est maintenant interactif
-        button.style.opacity = '1';
-      });
-
-      console.log('Hydration terminee -- page interactive !');
-    `);
-    return;
-  }
-
-  // ---- Page liste produits (SSR) ----
-  if (req.url === '/' || req.url === '/produits') {
-    const allProducts = await fetchAllProducts();
-
-    const content = `
-      <h1>Nos produits</h1>
-      ${allProducts.map(p => ProductCard(p)).join('')}
-    `;
-
-    const initialState = {
-      products: allProducts,
-      page: 'list',
-      timestamp: Date.now()
-    };
-
-    const html = Layout('Nos produits', content, initialState);
-    const elapsed = Date.now() - start;
-
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'public, max-age=30, stale-while-revalidate=60',
-      'X-SSR-Time': `${elapsed}ms`,
-      'Vary': 'Accept-Encoding'
-    });
-    res.end(html);
-    return;
-  }
-
-  // ---- Page produit individuel (SSR) ----
-  const match = req.url.match(/^\/produit\/(\d+)$/);
-  if (match) {
-    const product = await fetchProduct(match[1]);
-
-    if (!product) {
-      res.writeHead(404, { 'Content-Type': 'text/html' });
-      res.end(Layout('Non trouve', '<h1>Produit non trouve</h1>', { error: 404 }));
-      return;
-    }
-
-    const content = ProductCard(product);
-    const initialState = {
-      product,
-      page: 'detail',
-      timestamp: Date.now()
-    };
-
-    const html = Layout(product.nom, content, initialState);
-    const elapsed = Date.now() - start;
-
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'public, max-age=30, stale-while-revalidate=60',
-      'Surrogate-Key': `product-${product.id} products`,
-      'X-SSR-Time': `${elapsed}ms`,
-      'Vary': 'Accept-Encoding'
-    });
-    res.end(html);
-    return;
-  }
-
-  res.writeHead(404);
-  res.end('Not found');
-});
-
-server.listen(3000, () => {
-  console.log('Serveur SSR sur http://localhost:3000');
-  console.log('Pages disponibles :');
-  console.log('  http://localhost:3000/          (liste produits)');
-  console.log('  http://localhost:3000/produit/1 (detail produit)');
-});
-```
-
----
-
-## 3. Hydration : concept, cout, "uncanny valley"
-
-### 3.1 Qu'est-ce que l'hydration ?
-
-L'hydration est le processus par lequel le JavaScript cote client **"prend le controle"** du HTML généré par le serveur :
-
-```
-HTML SSR (statique)          +  JavaScript client      =  Page interactive
-                             |
-<button>Ajouter</button>     |  button.addEventListener  =  <button onclick="...">
-(visible mais ne fait rien)  |  ('click', handler)           Ajouter
-                             |                               </button>
-```
-
-### 3.2 L'analogie du mannequin
-
-Imagine un magasin de vetements :
-- **SSR** = mettre des mannequins habilles en vitrine (le client voit immediatement les vetements)
-- **Hydration** = remplacer chaque mannequin par un vendeur vivant (qui peut interagir avec le client)
-
-Pendant le remplacement, les mannequins sont la mais ne peuvent pas repondre aux questions -- c'est la "uncanny valley" du SSR.
-
-### 3.3 L'Uncanny Valley du SSR
-
-```
-Timeline de l'experience utilisateur :
-========================================
-
-  |---- HTML recu ----|---- JS telecharge ----|---- Hydration ----|
-  0                  300ms                   700ms               900ms
-
-  [Ecran blanc]  -->  [Contenu visible     ]  -->  [Page interactive]
-                      [mais non interactif ]
-                      |                     |
-                      +-- UNCANNY VALLEY ---+
-
-  L'utilisateur VOIT un bouton "Ajouter au panier".
-  Il CLIQUE dessus.
-  RIEN ne se passe.
-  Il est frustre.
-
-  C'est l'Uncanny Valley : ca RESSEMBLE a une page interactive,
-  mais ca ne l'est pas encore.
-```
-
-### 3.4 Mesurer le cout de l'hydration
-
-```js
-// Dans le script client
-const hydrationStart = performance.now();
-
-// ... hydration ...
-
-const hydrationEnd = performance.now();
-console.log(`Hydration: ${(hydrationEnd - hydrationStart).toFixed(1)}ms`);
-
-// Reporter comme metrique
-if ('PerformanceObserver' in window) {
-  performance.measure('hydration', {
-    start: hydrationStart,
-    end: hydrationEnd
-  });
-}
-```
-
-### 3.5 Solutions pour reduire le cout d'hydration
-
-| Technique | Description | Complexite |
-|-----------|-------------|------------|
-| Progressive Hydration | Hydrater section par section, en priorite ce qui est visible | Moyenne |
-| Partial Hydration | Ne pas hydrater les parties statiques (Astro "islands") | Moyenne |
-| Resumability | Pas d'hydration du tout, le framework reprend la ou le serveur s'est arrete (Qwik) | Elevee |
-| Selective Hydration | React 18+ : hydrater en priorite les composants avec lesquels l'utilisateur interagit | Faible (React) |
-
----
-
-## 4. Streaming SSR
-
-### 4.1 Le problème du SSR classique
-
-En SSR classique, le serveur doit attendre que **tout** le HTML soit généré avant de commencer a envoyer :
-
-```
-SSR classique (buffered) :
-===========================
-
-Serveur : [Fetch donnees (200ms)] [Render HTML (100ms)] [Envoyer tout]
-Client  :                                                [----Recevoir---]
-                                                         ^
-                                                         TTFB = 300ms
-
-Le client attend 300ms avant de recevoir le premier octet.
-```
-
-### 4.2 SSR streaming
-
-Avec le streaming, le serveur envoie le HTML par morceaux au fur et à mesure :
-
-```
-SSR streaming :
-================
-
-Serveur : [Shell HTML] [Fetch donnees...] [Render section 1] [Render section 2]
-Client  : [Shell recu] [Affiche shell   ] [Section 1 recu  ] [Section 2 recu  ]
-          ^                                ^                   ^
-          TTFB = 50ms                      Progressif !        Complet
-          (head + shell envoyes immediatement)
-```
-
-### 4.3 Implementation : Streaming SSR avec `node:http`
-
-```js
-import { createServer } from 'node:http';
-
-// Simuler des sources de donnees avec differentes latences
-async function fetchHeroProduct() {
-  await new Promise(r => setTimeout(r, 50));
-  return { id: 1, nom: 'Clavier mecanique', prix: 89.99 };
-}
-
-async function fetchRecommendations() {
-  await new Promise(r => setTimeout(r, 300)); // Plus lent !
-  return [
-    { id: 2, nom: 'Souris ergonomique', prix: 49.99 },
-    { id: 3, nom: 'Tapis de souris XL', prix: 24.99 }
-  ];
-}
-
-async function fetchReviews() {
-  await new Promise(r => setTimeout(r, 500)); // Encore plus lent !
-  return [
-    { auteur: 'Alice', note: 5, texte: 'Excellent clavier !' },
-    { auteur: 'Bob', note: 4, texte: 'Bon rapport qualite prix.' }
-  ];
-}
-
-function escapeHtml(str) {
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-const server = createServer(async (req, res) => {
-  if (req.url !== '/') {
-    res.writeHead(404);
-    res.end('Not found');
-    return;
-  }
-
-  // ---- Streaming SSR ----
-  res.writeHead(200, {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Transfer-Encoding': 'chunked',
-    'Cache-Control': 'public, max-age=10, stale-while-revalidate=30',
-    'X-SSR-Mode': 'streaming'
-  });
-
-  // 1. Envoyer le shell immediatement (TTFB rapide)
-  res.write(`<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8">
-  <title>Streaming SSR Demo</title>
-  <style>
-    body { font-family: system-ui; margin: 0; }
-    main { max-width: 800px; margin: 0 auto; padding: 1rem; }
-    .skeleton { background: #e0e0e0; border-radius: 4px;
-      animation: pulse 1.5s infinite; height: 200px; margin: 1rem 0; }
-    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
-    .section { border: 1px solid #ddd; padding: 1rem; margin: 1rem 0; border-radius: 8px; }
-  </style>
-</head>
-<body>
-  <header style="background:#1a1a2e;color:white;padding:1rem;">
-    <h1>Streaming SSR</h1>
-  </header>
   <main>
-    <div id="hero">
-      <div class="skeleton" id="hero-skeleton"></div>
-    </div>
-    <div id="recommendations">
-      <div class="skeleton" id="reco-skeleton"></div>
-    </div>
-    <div id="reviews">
-      <div class="skeleton" id="reviews-skeleton"></div>
-    </div>
+    <h1>${escapeHtml(s.titre)}</h1>
+    <p>Le ${escapeHtml(s.date)} — ${escapeHtml(s.lieu)}</p>
   </main>
-`);
-
-  // 2. Charger le hero product (rapide) et streamer
-  const hero = await fetchHeroProduct();
-  res.write(`
-  <script>
-    document.getElementById('hero').innerHTML = \`
-      <div class="section">
-        <h2>${escapeHtml(hero.nom)}</h2>
-        <p style="font-size:2rem;color:#e94560;">${hero.prix.toFixed(2)} EUR</p>
-        <button onclick="alert('Ajoute!')">Ajouter au panier</button>
-      </div>
-    \`;
-  </script>
-`);
-
-  // 3. Charger les recommandations et streamer
-  const recos = await fetchRecommendations();
-  res.write(`
-  <script>
-    document.getElementById('recommendations').innerHTML = \`
-      <div class="section">
-        <h3>Recommandations</h3>
-        ${recos.map(r => `<p>${escapeHtml(r.nom)} -- ${r.prix.toFixed(2)} EUR</p>`).join('')}
-      </div>
-    \`;
-  </script>
-`);
-
-  // 4. Charger les avis et streamer (le plus lent)
-  const reviews = await fetchReviews();
-  res.write(`
-  <script>
-    document.getElementById('reviews').innerHTML = \`
-      <div class="section">
-        <h3>Avis clients</h3>
-        ${reviews.map(r =>
-          `<p><strong>${escapeHtml(r.auteur)}</strong> (${'*'.repeat(r.note)}) : ${escapeHtml(r.texte)}</p>`
-        ).join('')}
-      </div>
-    \`;
-    window.__INITIAL_STATE__ = ${JSON.stringify({ hero, recos, reviews })};
-  </script>
-`);
-
-  // 5. Fermer le document
-  res.end(`
-  <script src="/client.js" defer></script>
-</body>
-</html>`);
-});
-
-server.listen(3000, () => {
-  console.log('Streaming SSR sur http://localhost:3000');
-  console.log('Observez le chargement progressif des sections !');
-});
-```
-
-### 4.4 Avantages du streaming
-
-```
-SSR classique :  TTFB = 550ms (attend TOUT : 50 + 300 + 500ms)
-SSR streaming :  TTFB = 50ms  (envoie le shell immediatement)
-
-Le hero s'affiche a 50ms  (au lieu de 550ms)
-Les recos a 300ms         (au lieu de 550ms)
-Les avis a 500ms          (au lieu de 550ms)
-
-Gain : l'utilisateur voit du contenu 500ms plus tot !
-```
-
----
-
-## 5. SSR Tokens : window.__INITIAL_STATE__
-
-### 5.1 Le problème du double-fetch
-
-Sans state initial, le client doit re-fetcher les donnees que le serveur avait déjà :
-
-```
-SANS __INITIAL_STATE__ :
-  Serveur : fetch donnees -> render HTML -> envoyer
-  Client  : recevoir HTML -> afficher -> fetch donnees (ENCORE !) -> re-render
-
-  Les donnees sont fetchees DEUX FOIS. Gaspillage !
-```
-
-### 5.2 La solution : serialiser le state
-
-```
-AVEC __INITIAL_STATE__ :
-  Serveur : fetch donnees -> render HTML + serialiser state -> envoyer
-  Client  : recevoir HTML -> afficher -> lire __INITIAL_STATE__ -> hydrater (PAS de re-fetch)
-
-  Les donnees sont fetchees UNE SEULE FOIS. Le client utilise le state embarque.
-```
-
-### 5.3 Sécurité de la serialisation
-
-Attention : injecter du JSON dans du HTML peut créer des failles XSS.
-
-```js
-// DANGER : serialisation naive
-const state = { message: '</script><script>alert("XSS")</script>' };
-
-// Ce HTML est vulnerable :
-`<script>window.__INITIAL_STATE__ = ${JSON.stringify(state)};</script>`
-// Resultat : </script> ferme le tag et execute le script malveillant !
-
-// SOLUTION : echapper les caracteres dangereux
-function safeSerialize(data) {
-  return JSON.stringify(data)
-    .replace(/</g, '\\u003c')     // Empeche </script>
-    .replace(/>/g, '\\u003e')     // Empeche les tags HTML
-    .replace(/\//g, '\\u002f')    // Empeche les fermetures de tags
-    .replace(/\u2028/g, '\\u2028') // Line separator
-    .replace(/\u2029/g, '\\u2029'); // Paragraph separator
-}
-
-// Utilisation securisee
-`<script>window.__INITIAL_STATE__ = ${safeSerialize(state)};</script>`
-```
-
-### 5.4 Implementation complete avec serialisation securisee
-
-```js
-import { createServer } from 'node:http';
-
-function safeSerialize(data) {
-  return JSON.stringify(data)
-    .replace(/</g, '\\u003c')
-    .replace(/>/g, '\\u003e')
-    .replace(/\//g, '\\u002f')
-    .replace(/\u2028/g, '\\u2028')
-    .replace(/\u2029/g, '\\u2029');
-}
-
-function escapeHtml(str) {
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-// Simuler un store de donnees
-async function fetchPageData(url) {
-  await new Promise(r => setTimeout(r, 30));
-
-  if (url === '/') {
-    return {
-      page: 'home',
-      title: 'Accueil',
-      user: null,
-      products: [
-        { id: 1, nom: 'Widget A', prix: 19.99 },
-        { id: 2, nom: 'Widget B', prix: 29.99 }
-      ]
-    };
-  }
-
-  return null;
-}
-
-const server = createServer(async (req, res) => {
-  if (req.url === '/client.js') {
-    res.writeHead(200, {
-      'Content-Type': 'application/javascript',
-      'Cache-Control': 'max-age=31536000, immutable'
-    });
-    res.end(`
-      // Le client recupere le state sans re-fetch
-      const state = window.__INITIAL_STATE__;
-      console.log('State initial recupere:', state);
-      console.log('Nombre de produits:', state.products.length);
-
-      // Hydration : attacher les handlers
-      document.querySelectorAll('[data-action]').forEach(el => {
-        const action = el.dataset.action;
-        el.addEventListener('click', () => {
-          console.log('Action:', action, 'sur', el.dataset);
-        });
-      });
-
-      // Navigation SPA apres hydration
-      // (les prochaines navigations sont cote client)
-      document.querySelectorAll('a[data-spa]').forEach(link => {
-        link.addEventListener('click', (e) => {
-          e.preventDefault();
-          console.log('Navigation SPA vers:', link.href);
-          // router.push(link.href) dans un vrai framework
-        });
-      });
-
-      console.log('Hydration complete !');
-    `);
-    return;
-  }
-
-  const data = await fetchPageData(req.url);
-
-  if (!data) {
-    res.writeHead(404, { 'Content-Type': 'text/html' });
-    res.end('<h1>404 Not Found</h1>');
-    return;
-  }
-
-  const html = `<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8">
-  <title>${escapeHtml(data.title)}</title>
-</head>
-<body>
-  <div id="root">
-    <h1>${escapeHtml(data.title)}</h1>
-    <ul>
-      ${data.products.map(p => `
-        <li>
-          ${escapeHtml(p.nom)} - ${p.prix.toFixed(2)} EUR
-          <button data-action="add-to-cart" data-product-id="${p.id}">
-            Ajouter
-          </button>
-        </li>
-      `).join('')}
-    </ul>
-  </div>
-  <script>window.__INITIAL_STATE__ = ${safeSerialize(data)};</script>
-  <script src="/client.js" defer></script>
+  <script type="module" src="/assets/app.9f8e7d6c.js"></script>
 </body>
 </html>`;
+}
 
-  res.writeHead(200, {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Cache-Control': 'public, max-age=30, stale-while-revalidate=60'
+// Cache de rendu en mémoire : clé = slug, valeur = { html, expiresAt }
+const renderCache = new Map<string, { html: string; expiresAt: number }>();
+const TTL_MS = 300_000; // 5 min, cohérent avec s-maxage=300
+
+app.get('/sorties/:slug', async (req, res) => {
+  const { slug } = req.params;
+  const now = Date.now();
+
+  // 1) HIT ? on ressert sans re-rendre (0 ms de CPU de rendu)
+  const cached = renderCache.get(slug);
+  if (cached && now < cached.expiresAt) {
+    res.set('Cache-Control', 'public, s-maxage=300, max-age=0');
+    res.set('Vary', 'Accept-Encoding');
+    res.set('X-Render-Cache', 'HIT');
+    return res.type('html').send(cached.html);
+  }
+
+  // 2) MISS : on rend (fetch + assemblage), on mesure, on stocke
+  const start = Date.now();
+  const html = await renderSortie(slug);
+  const renderMs = Date.now() - start;
+
+  if (!html) {
+    res.set('Cache-Control', 'no-store'); // ne pas cacher un 404
+    return res.status(404).type('html').send('<h1>Sortie introuvable</h1>');
+  }
+
+  renderCache.set(slug, { html, expiresAt: now + TTL_MS });
+  res.set('Cache-Control', 'public, s-maxage=300, max-age=0');
+  res.set('Vary', 'Accept-Encoding');
+  res.set('X-Render-Cache', 'MISS');
+  res.set('Server-Timing', `render;dur=${renderMs}`); // TTFB visible en DevTools
+  res.type('html').send(html);
+});
+
+app.listen(3000, () => console.log('http://localhost:3000/sorties/pique-nique-juin'));
+```
+
+**Pourquoi c'est correct :**
+- Le HTML contient déjà `<h1>` et `og:title` → SEO et aperçu social réparés (problèmes 1 et 2 du §1).
+- Au **MISS**, le TTFB inclut les 120 ms de `fetchSortie`. Au **HIT**, on saute le fetch et l'assemblage : le TTFB s'effondre → c'est tout l'intérêt du cache de rendu.
+- `s-maxage=300` fait porter le cache par le **CDN** (partagé) ; `max-age=0` empêche le navigateur de figer la page. `Server-Timing` rend le coût de rendu lisible dans l'onglet Network.
+
+### Exemple 2 — La même page en Next.js 15, cachée puis rendue dynamique
+
+```tsx
+// app/sorties/[slug]/page.tsx — page publique, rendu caché + revalidé
+// Le rendu de cette route est mis en cache et revalidé toutes les 5 min.
+export const revalidate = 300;
+
+export default async function SortiePage({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  const { slug } = await params;
+
+  // fetch avec revalidation : Data Cache actif, re-fetch au plus toutes les 300 s.
+  // Sans cette option, en Next 15, le fetch NE serait PAS caché (rendu dynamique).
+  const res = await fetch(`https://api.tribuzen.app/sorties/${slug}`, {
+    next: { revalidate: 300 },
   });
-  res.end(html);
-});
-
-server.listen(3000, () => {
-  console.log('SSR avec __INITIAL_STATE__ sur http://localhost:3000');
-});
-```
-
----
-
-## 6. Caching du SSR : quand cacher du HTML, cache-keys, Vary
-
-### 6.1 Quand cacher du HTML SSR ?
-
-```
-+------------------------------+----------+---------------------------+
-| Type de page                 | Cachable | Strategie                 |
-+------------------------------+----------+---------------------------+
-| Page statique (About, FAQ)   | Oui +++  | max-age long, CDN         |
-| Page produit (public)        | Oui ++   | max-age court + SWR       |
-| Page listing (recherche)     | Oui +    | Vary sur query params     |
-| Page perso (dashboard)       | Non      | private ou no-store       |
-| Page avec panier             | Non*     | Edge-side Includes (ESI)  |
-+------------------------------+----------+---------------------------+
-
-* Sauf si on separe la partie publique de la partie personnalisee
-```
-
-### 6.2 Le defi : pages mi-publiques mi-personnalisees
-
-```
-Page produit typique :
-=======================
-+----------------------------------+
-| Header (nom utilisateur, panier) |  <-- PERSONNALISE (pas cachable)
-+----------------------------------+
-| Breadcrumb                       |  <-- PUBLIC (cachable)
-+----------------------------------+
-| Produit : Clavier mecanique      |  <-- PUBLIC (cachable)
-| 89.99 EUR                        |
-| *** (avis)                       |  <-- PUBLIC (cachable)
-+----------------------------------+
-| "Bonjour Alice, voici vos recos" |  <-- PERSONNALISE (pas cachable)
-+----------------------------------+
-| Footer                           |  <-- PUBLIC (cachable)
-+----------------------------------+
-
-Solution 1 : ne pas cacher du tout (simple mais sous-optimal)
-Solution 2 : cacher le HTML sans les parties perso, les injecter cote client
-Solution 3 : Edge-Side Includes (ESI) -- le CDN assemble les morceaux
-```
-
-### 6.3 Cache-keys pour le SSR
-
-La cache-key déterminé QUAND deux requêtes sont considerees identiques :
-
-```
-Cache-key par defaut : methode + URL + headers Vary
-====================================================
-
-GET /produits?page=1&sort=prix
-GET /produits?page=1&sort=nom
---> 2 cache-keys differentes (query params differents)
-
-GET /produits?page=1&sort=prix   Accept-Language: fr
-GET /produits?page=1&sort=prix   Accept-Language: en
---> 2 cache-keys differentes (si Vary: Accept-Language)
-```
-
-### 6.4 Header Vary pour le SSR
-
-```http
-HTTP/1.1 200 OK
-Content-Type: text/html
-Cache-Control: public, max-age=300
-Vary: Accept-Language, Accept-Encoding
-```
-
-```
-Vary: Accept-Language
-=====================
-GET /produit/42 (Accept-Language: fr) --> Cache-key A : HTML en francais
-GET /produit/42 (Accept-Language: en) --> Cache-key B : HTML en anglais
-
-Vary: Accept-Encoding
-=====================
-GET /style.css (Accept-Encoding: gzip)    --> Cache-key A : compresse
-GET /style.css (Accept-Encoding: identity) --> Cache-key B : non compresse
-```
-
-**Attention** : ne jamais utiliser `Vary: *` (désactivé le cache) ou `Vary: Cookie` (une cache-key par utilisateur = aucun partage).
-
-### 6.5 Implementation : cache SSR avec cache-keys intelligentes
-
-```js
-import { createServer } from 'node:http';
-import { createHash } from 'node:crypto';
-
-// ---- Cache SSR ----
-class SSRCache {
-  #store = new Map();
-  #maxEntries;
-  #hits = 0;
-  #misses = 0;
-
-  constructor(maxEntries = 500) {
-    this.#maxEntries = maxEntries;
-  }
-
-  // Generer une cache-key a partir de la requete
-  buildCacheKey(req) {
-    const url = req.url;
-    const lang = req.headers['accept-language']?.split(',')[0] || 'fr';
-    const isMobile = /Mobile|Android/i.test(req.headers['user-agent'] || '');
-    const device = isMobile ? 'mobile' : 'desktop';
-
-    // La cache-key combine URL + langue + type d'appareil
-    const raw = `${url}|${lang}|${device}`;
-    return createHash('md5').update(raw).digest('hex');
-  }
-
-  get(key) {
-    const entry = this.#store.get(key);
-    if (!entry) {
-      this.#misses++;
-      return null;
-    }
-    if (Date.now() > entry.expiresAt) {
-      this.#store.delete(key);
-      this.#misses++;
-      return null;
-    }
-    this.#hits++;
-    return entry;
-  }
-
-  set(key, html, metadata, ttlSeconds = 300) {
-    // Eviction LRU si plein
-    if (this.#store.size >= this.#maxEntries) {
-      const firstKey = this.#store.keys().next().value;
-      this.#store.delete(firstKey);
-    }
-
-    this.#store.set(key, {
-      html,
-      metadata,
-      storedAt: Date.now(),
-      expiresAt: Date.now() + ttlSeconds * 1000
-    });
-  }
-
-  invalidateByTag(tag) {
-    let count = 0;
-    for (const [key, entry] of this.#store) {
-      if (entry.metadata.tags?.includes(tag)) {
-        this.#store.delete(key);
-        count++;
-      }
-    }
-    return count;
-  }
-
-  stats() {
-    const total = this.#hits + this.#misses;
-    return {
-      entries: this.#store.size,
-      hits: this.#hits,
-      misses: this.#misses,
-      hitRatio: total > 0 ? (this.#hits / total * 100).toFixed(1) + '%' : 'N/A'
-    };
-  }
-}
-
-const ssrCache = new SSRCache(1000);
-
-// ---- Fonctions de rendu ----
-function escapeHtml(str) {
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-async function renderProductPage(productId, lang) {
-  // Simuler le fetch de donnees
-  await new Promise(r => setTimeout(r, 100));
-
-  const product = {
-    id: productId,
-    nom: lang === 'en' ? 'Mechanical Keyboard' : 'Clavier mecanique',
-    prix: 89.99,
-    description: lang === 'en'
-      ? 'A premium mechanical keyboard with Cherry MX switches.'
-      : 'Un clavier mecanique premium avec des switches Cherry MX.'
-  };
-
-  const html = `<!DOCTYPE html>
-<html lang="${lang}">
-<head>
-  <meta charset="utf-8">
-  <title>${escapeHtml(product.nom)}</title>
-</head>
-<body>
-  <h1>${escapeHtml(product.nom)}</h1>
-  <p>${product.prix.toFixed(2)} EUR</p>
-  <p>${escapeHtml(product.description)}</p>
-  <p><small>${lang === 'en' ? 'Rendered at' : 'Genere a'} ${new Date().toISOString()}</small></p>
-</body>
-</html>`;
-
-  return { html, product };
-}
-
-// ---- Serveur ----
-const server = createServer(async (req, res) => {
-  // Stats endpoint
-  if (req.url === '/cache-stats') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(ssrCache.stats(), null, 2));
-    return;
-  }
-
-  // Purge endpoint
-  if (req.url.startsWith('/purge/')) {
-    const tag = req.url.replace('/purge/', '');
-    const count = ssrCache.invalidateByTag(tag);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ purged: count, tag }));
-    return;
-  }
-
-  // SSR avec cache
-  const match = req.url.match(/^\/produit\/(\d+)$/);
-  if (match) {
-    const productId = match[1];
-    const cacheKey = ssrCache.buildCacheKey(req);
-    const lang = (req.headers['accept-language'] || 'fr').split(',')[0].substring(0, 2);
-
-    // Verifier le cache SSR
-    const cached = ssrCache.get(cacheKey);
-    if (cached) {
-      res.writeHead(200, {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'public, max-age=30, stale-while-revalidate=60',
-        'X-SSR-Cache': 'HIT',
-        'X-Cache-Key': cacheKey.substring(0, 8),
-        'Age': String(Math.floor((Date.now() - cached.storedAt) / 1000)),
-        'Vary': 'Accept-Language, Accept-Encoding'
-      });
-      res.end(cached.html);
-      return;
-    }
-
-    // Cache miss : render SSR
-    const start = Date.now();
-    const { html, product } = await renderProductPage(productId, lang);
-    const renderTime = Date.now() - start;
-
-    // Stocker en cache
-    ssrCache.set(cacheKey, html, {
-      tags: [`product-${productId}`, 'products'],
-      lang,
-      url: req.url
-    }, 300); // 5 minutes
-
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'public, max-age=30, stale-while-revalidate=60',
-      'CDN-Cache-Control': 'max-age=300',
-      'Surrogate-Key': `product-${productId} products`,
-      'X-SSR-Cache': 'MISS',
-      'X-SSR-Render-Time': `${renderTime}ms`,
-      'Vary': 'Accept-Language, Accept-Encoding'
-    });
-    res.end(html);
-    return;
-  }
-
-  res.writeHead(404);
-  res.end('Not found');
-});
-
-server.listen(3000, () => {
-  console.log('SSR cache sur http://localhost:3000');
-  console.log('');
-  console.log('Tester :');
-  console.log('  curl -H "Accept-Language: fr" http://localhost:3000/produit/1');
-  console.log('  curl -H "Accept-Language: en" http://localhost:3000/produit/1');
-  console.log('  curl http://localhost:3000/cache-stats');
-  console.log('  curl http://localhost:3000/purge/product-1');
-});
-```
-
-### 6.6 Stratégies de cache SSR par framework
-
-| Framework | Cache SSR natif | Stratégie recommandee |
-|-----------|----------------|----------------------|
-| Next.js | ISR (Incremental Static Regeneration) | `revalidate: 60` dans `getStaticProps` |
-| Nuxt 3 | `routeRules` + Nitro cache | `swr: 3600` dans `nuxt.config` |
-| Remix | Loaders + headers | `Cache-Control` dans le loader |
-| Astro | Build-time par defaut | Pages hybrides pour le dynamique |
-| SvelteKit | `+page.server.js` | `setHeaders` dans le `load` |
-
-### 6.7 Quand NE PAS cacher le SSR
-
-```
-NE PAS cacher quand :
-=====================
-1. La page contient des donnees personnalisees (panier, dashboard)
-   --> Cache-Control: private, no-store
-
-2. La page depend d'un cookie de session
-   --> Vary: Cookie = une entree par utilisateur = cache inutile
-
-3. La page change a chaque seconde (cours de bourse)
-   --> Pas de cache, ou max-age=1
-
-4. La page contient des tokens CSRF
-   --> Le token serait partage entre utilisateurs = faille de securite !
-
-CACHER quand :
-==============
-1. Page produit publique (meme contenu pour tous)
-2. Page d'accueil (meme layout pour tous)
-3. Pages SEO (blog, documentation)
-4. Resultats de recherche (meme query = meme resultat)
-```
-
----
-
-## 7. Récapitulatif : architecture SSR + cache optimale
-
-```
-Architecture recommandee :
-===========================
-
-                         Cache-Control: max-age=30, swr=60
-  Browser ------> CDN -------> SSR Cache (in-memory LRU)
-                   |                |
-                   |           [Cache MISS]
-                   |                |
-                   |           SSR Render
-                   |                |
-                   |           App Cache (Redis)
-                   |                |
-                   |           [Cache MISS]
-                   |                |
-                   |           Database
-                   |
-              CDN-Cache-Control: max-age=300
-              Surrogate-Key: product-42
-
-Invalidation :
-  DB change --> Redis DEL --> SSR cache invalidate --> CDN purge by tag
-  Browser : attend max-age=30 (maximum 30s de stale)
-```
-
----
-
-## Points clés
-
-1. Le **SSR** généré le HTML cote serveur, offrant un meilleur SEO et un FCP plus rapide que le CSR.
-2. Le cycle SSR est : requête -> fetch donnees -> render HTML -> envoyer -> **hydration** cote client.
-3. L'**hydration** est le processus par lequel le JS "prend le controle" du HTML statique -- pendant ce temps, la page est visible mais non interactive ("uncanny valley").
-4. Le **streaming SSR** envoie le HTML par morceaux, reduisant drastiquement le TTFB (le shell est envoye immediatement).
-5. `window.__INITIAL_STATE__` permet au client de récupérer les donnees sans re-fetch -- attention à la **serialisation securisee** (XSS).
-6. Le cache SSR utilise des **cache-keys** combinees (URL + langue + device) et le header **Vary** pour differencier les variantes.
-7. Ne jamais cacher du HTML contenant des donnees **personnalisees** (panier, CSRF, dashboard) dans un cache partage.
-8. La stratégie optimale combine un **TTL court cote browser** (30s) avec un **TTL plus long cote CDN** (5min) et des **Surrogate Keys** pour la purge instantanee.
-
----
-
-## Lab associe
-
-> Lab 10 — Construire un serveur SSR complet avec streaming, hydration, `__INITIAL_STATE__`, cache LRU et invalidation par tag
-
----
-
-## Pour aller plus loin
-
-- [web.dev - Rendering on the Web](https://web.dev/rendering-on-the-web/)
-- [React 18 - Streaming SSR](https://react.dev/reference/react-dom/server/renderToPipeableStream)
-- [Dan Abramov - The WET Codebase](https://overreacted.io/)
-- [Patterns.dev - Rendering Patterns](https://www.patterns.dev/posts/rendering-patterns/)
-- [Next.js - Caching](https://nextjs.org/docs/app/building-your-application/caching)
-- [MDN - Vary header](https://developer.mozilla.org/fr/docs/Web/HTTP/Headers/Vary)
-
----
-
-## Si tu es perdu
-
-Imagine un restaurant :
-
-- **CSR** (Client-Side Rendering) = on te donne les ingredients et la recette, tu cuisines toi-même à la maison. C'est long avant de manger, mais après c'est flexible.
-- **SSR** (Server-Side Rendering) = le chef prepare le plat en cuisine et te l'apporte tout pret. Tu manges plus vite, mais le chef est occupe.
-- **Hydration** = après que le plat est servi (HTML affiche), le serveur t'apporte les couverts (event listeners). Pendant un instant, tu as le plat devant toi mais tu ne peux pas encore le manger -- c'est la "uncanny valley".
-- **Streaming SSR** = le chef envoie l'entree des qu'elle est prete, sans attendre le plat et le dessert.
-- **`__INITIAL_STATE__`** = le chef inscrit la recette sur un petit papier dans l'assiette, pour que tu puisses refaire le plat plus tard sans redemander.
-- **Cache SSR** = preparer 10 portions d'avance pour les plats populaires.
-
----
-
-## En pratique — Configuration Next.js
-
-Next.js (App Router) offre un controle granulaire sur le SSR et le cache. Voici les configurations les plus courantes.
-
-### Forcer le SSR dynamique (pas de cache)
-
-```typescript
-// app/products/[id]/page.tsx — SSR dynamique (force-dynamic)
-export const dynamic = 'force-dynamic'; // Force le SSR a chaque requete
-export const revalidate = 0;            // Pas de cache
-
-export default async function ProductPage({ params }) {
-  const res = await fetch(`https://api.example.com/products/${params.id}`, {
-    cache: 'no-store', // Pas de cache sur ce fetch
-  });
-  const product = await res.json();
+  const sortie = await res.json();
 
   return (
     <main>
-      <h1>{product.name}</h1>
-      <p>{product.price} EUR</p>
+      <h1>{sortie.titre}</h1>
+      <p>Le {sortie.date} — {sortie.lieu}</p>
     </main>
   );
 }
 ```
 
-### SSR avec cache (revalidation temporelle)
+```tsx
+// app/mon-compte/page.tsx — page perso : dynamique, jamais cachée
+import { cookies } from 'next/headers';
 
-```typescript
-// app/products/[id]/page.tsx — SSR avec revalidation
-export const revalidate = 60; // Revalider toutes les 60 secondes
+export default async function ComptePage() {
+  // Lire cookies() bascule AUTOMATIQUEMENT la route en dynamique (SSR à chaque requête).
+  const session = (await cookies()).get('session')?.value;
 
-export default async function ProductPage({ params }) {
-  // Cache au niveau du fetch individuel
-  const product = await fetch(`https://api.example.com/products/${params.id}`, {
-    next: { revalidate: 60 }, // Cache ce fetch pendant 60s
-  });
-
-  // Ce fetch a son propre TTL
-  const reviews = await fetch(`https://api.example.com/products/${params.id}/reviews`, {
-    next: { revalidate: 300 }, // Les avis changent moins souvent : 5 min
-  });
-
-  // ...
-}
-```
-
-### Routes dynamiques automatiques : `headers()` et `cookies()`
-
-L'utilisation de `headers()` ou `cookies()` rend automatiquement la route **dynamique** (SSR à chaque requête, pas de cache) :
-
-```typescript
-// app/dashboard/page.tsx — Route automatiquement dynamique
-import { headers, cookies } from 'next/headers';
-
-export default async function Dashboard() {
-  // Appeler headers() ou cookies() = route dynamique, jamais cachee
-  const headersList = headers();
-  const theme = cookies().get('theme')?.value || 'light';
-  const authToken = headersList.get('authorization');
-
-  // Cette page est regeneree a CHAQUE requete (comme force-dynamic)
-  const userData = await fetch('https://api.example.com/me', {
-    headers: { Authorization: authToken },
+  // no-store explicite : ce fetch n'entre ni dans le Data Cache ni dans un cache partagé.
+  const res = await fetch('https://api.tribuzen.app/me', {
+    headers: { Authorization: `Bearer ${session}` },
     cache: 'no-store',
   });
+  const me = await res.json();
 
+  return <h1>Bonjour {me.prenom}</h1>;
+}
+```
+
+**Ce que Next fait, mappé sur notre théorie :**
+- `SortiePage` : `revalidate = 300` + `next: { revalidate: 300 }` → Full Route Cache + Data Cache actifs. Équivaut à notre `s-maxage=300` de l'exemple 1, mais géré par le framework.
+- `ComptePage` : l'appel à `cookies()` rend la route dynamique ; `cache: 'no-store'` confirme qu'aucune donnée personnelle n'est cachée. C'est la règle 2.8 appliquée par Next.
+
+---
+
+## 4. Pièges & misconceptions
+
+### PIÈGE #1 — Croire que « SSR » veut dire « plus rapide » partout
+
+```
+❌ "On passe en SSR, tout ira plus vite."
+```
+
+Le SSR **augmente** le TTFB brut (le serveur rend au lieu de servir un fichier statique). Ce qu'il améliore, c'est le **FCP** et le **SEO**. Le TTFB ne redevient bon **que** si le HTML est caché.
+
+```
+✅ SSR améliore FCP/SEO ; le TTFB reste bon UNIQUEMENT avec un cache de rendu (s-maxage / revalidate).
+```
+
+**Règle :** SSR sans cache = TTFB qui grimpe sous charge. Le cache de rendu n'est pas optionnel, c'est le complément du SSR.
+
+### PIÈGE #2 — Cacher en partagé un HTML qui contient du perso
+
+```http
+❌ Cache-Control: public, s-maxage=300   # sur une page affichant "Bonjour Alice"
+```
+
+Le CDN met la page d'Alice en cache partagé et la sert à Bob. Fuite de données (nom, avatar, parfois plus).
+
+```http
+✅  Corps public → public, s-maxage=300   ; fragment perso → private, no-store (isolé, appelé à part)
+```
+
+**Règle :** on ne cache en partagé **que** ce qui est identique pour tous. Le perso sort dans un fragment `private`.
+
+### PIÈGE #3 — `Vary: Cookie` pour « gérer » les pages connectées
+
+```http
+❌ Cache-Control: public, s-maxage=300
+   Vary: Cookie
+```
+
+Chaque utilisateur a un cookie différent → une **entrée de cache par utilisateur** → taux de hit ≈ 0. Le cache ne sert à rien tout en donnant l'illusion d'exister.
+
+```http
+✅  Page dépendant du cookie → private, no-store (ou sortir le perso en fragment)
+```
+
+**Règle :** si le HTML dépend d'un cookie de session, ce n'est pas une page à cacher en partagé.
+
+### PIÈGE #4 — Supposer que `fetch()` Next.js est caché par défaut (faux depuis Next 15)
+
+```tsx
+❌ // "Ce fetch est caché, c'est Next" — VRAI en Next 13/14, FAUX en Next 15
+const data = await fetch('https://api.tribuzen.app/sorties/42');
+```
+
+Depuis Next 15, un `fetch` **sans option n'est pas caché** : la route devient dynamique (SSR à chaque requête). Beaucoup de code copié d'anciens tutoriels croit encore l'inverse.
+
+```tsx
+✅ const data = await fetch('https://api.tribuzen.app/sorties/42', { cache: 'force-cache' });
+✅ const data = await fetch('https://api.tribuzen.app/sorties/42', { next: { revalidate: 300 } });
+```
+
+**Règle :** en Next 15, le cache de données est **opt-in explicite** (`force-cache` ou `next.revalidate`). Vérifie la version avant de raisonner sur le défaut.
+
+### PIÈGE #5 — `cookies()` / `headers()` posés « au cas où » dans une page qu'on voulait cacher
+
+```tsx
+❌ export const revalidate = 300;      // on croit cacher la route...
+import { headers } from 'next/headers';
+export default async function Page() {
+  const ua = (await headers()).get('user-agent'); // ...mais ceci la rend dynamique
   // ...
 }
 ```
 
-### `unstable_cache` : cache cote serveur pour les fonctions
+Lire `headers()`/`cookies()` bascule la route en **dynamique** : le `revalidate` est ignoré, la page est rendue à chaque requête.
 
-```typescript
-// app/products/[id]/page.tsx — Cache de fonctions cote serveur
-import { unstable_cache } from 'next/cache';
-
-// Encapsuler un appel DB dans un cache serveur
-const getCachedProduct = unstable_cache(
-  async (id: string) => {
-    // Cet appel DB est cache cote serveur
-    const product = await db.products.findUnique({ where: { id } });
-    return product;
-  },
-  ['product-detail'],     // Cle de cache
-  {
-    revalidate: 120,       // TTL de 2 minutes
-    tags: ['products'],    // Tags pour invalidation ciblee
-  }
-);
-
-export default async function ProductPage({ params }) {
-  const product = await getCachedProduct(params.id);
-  // ...
-}
+```tsx
+✅  Ne lis les API de requête que si le rendu en dépend vraiment. Sinon, la route reste cachable.
 ```
 
-### En-tetes `Cache-Control` envoyes par Next.js
-
-```
-Comportement par defaut de Next.js App Router :
-=================================================
-
-Page statique (SSG/ISR) :
-  Cache-Control: s-maxage=<revalidate>, stale-while-revalidate
-  → Le CDN cache la page, le navigateur revalide a chaque fois.
-
-Page dynamique (SSR, force-dynamic) :
-  Cache-Control: private, no-cache, no-store, max-age=0, must-revalidate
-  → Rien n'est cache. Chaque requete declenche un rendu serveur.
-
-Assets statiques (_next/static/) :
-  Cache-Control: public, max-age=31536000, immutable
-  → Cache agressif car les noms de fichiers contiennent un hash.
-```
-
-### `generateStaticParams` : pre-rendre des pages SSR au build
-
-```typescript
-// app/products/[id]/page.tsx — Pre-rendu statique de certaines pages
-export async function generateStaticParams() {
-  // Ces pages seront generees au build (comme du SSG)
-  const products = await fetch('https://api.example.com/products/popular');
-  const data = await products.json();
-
-  return data.map((product) => ({
-    id: String(product.id),
-  }));
-  // Les pages /products/1, /products/2, etc. sont pre-rendues
-  // Les autres pages sont generees a la demande (SSR) puis cachees (ISR)
-}
-
-export const revalidate = 3600; // Revalider toutes les heures
-
-export default async function ProductPage({ params }) {
-  const product = await fetch(`https://api.example.com/products/${params.id}`, {
-    next: { revalidate: 3600 },
-  });
-  // ...
-}
-```
-
-### Récapitulatif Next.js SSR
-
-| Configuration | Comportement | Cache-Control |
-|--------------|-------------|---------------|
-| `dynamic = 'force-dynamic'` | SSR à chaque requête | `private, no-cache, no-store` |
-| `revalidate = 0` | SSR à chaque requête | `private, no-cache, no-store` |
-| `revalidate = 60` | ISR : cache 60s puis revalide | `s-maxage=60, stale-while-revalidate` |
-| `cache: 'no-store'` (fetch) | Ce fetch spécifique n'est jamais cache | — |
-| `next: { revalidate: N }` (fetch) | Ce fetch est cache N secondes | — |
-| `headers()` / `cookies()` | Route automatiquement dynamique | `private, no-cache, no-store` |
-| `unstable_cache()` | Cache serveur avec TTL et tags | — (cache interne) |
-| `generateStaticParams()` | Pre-rendu au build (SSG) | `s-maxage=<revalidate>` |
+**Règle :** toute lecture d'API de requête = route dynamique. C'est voulu pour le perso, subi si c'est un oubli.
 
 ---
 
-## Defi
+## 5. Ancrage TribuZen
 
-### Enonce
+La page publique d'une sortie est le premier écran SSR de TribuZen — c'est le cas concret du §1, résolu.
 
-Tu as un site e-commerce avec SSR. La page `/produit/42` est vue 100 000 fois par jour. Le rendu SSR prend 150ms. Le site supporte le français et l'anglais, desktop et mobile.
+| Élément | Rendu | Cache |
+|---|---|---|
+| `GET /sorties/:slug` (corps public) | SSR à la requête | `public, s-maxage=300, max-age=0` + `Vary: Accept-Encoding` |
+| En-tête « Bonjour Alice » + avatar | hors HTML SSR (fragment client) | `GET /api/me/greeting` → `private, no-store` |
+| `GET /mon-compte` (dashboard) | SSR dynamique | `private, no-store` (jamais de CDN) |
+| Liste publique `GET /sorties?ville=lyon` | SSR à la requête | caché par variante de query, `s-maxage` court |
 
-1. Combien de variantes de cache faut-il pour cette page ?
-2. Quel `Vary` header utiliser ?
-3. Calcule le temps CPU economise par jour si le cache SSR à un hit ratio de 95% avec un TTL de 5 minutes.
-4. Ecris les headers `Cache-Control` optimaux pour le browser ET le CDN.
-5. La page affiche "Bonjour Alice" dans le header. Peut-on quand même la cacher ? Comment ?
+Décisions d'architecture :
+- **La page de sortie sort le personnel du HTML.** Le corps (titre, date, lieu, description) est identique pour tous → caché au CDN 5 min. Le bandeau connecté est injecté côté client après hydration via un appel `private`. On garde ainsi un HTML 100 % cachable **et** un SEO/aperçu social corrects.
+- **Le TTFB est surveillé** : `Server-Timing: render;dur=…` sur les MISS, `X-Render-Cache: HIT|MISS` pour vérifier le taux de hit du CDN en préproduction.
+- **Version Next.js** (si TribuZen migre le front public vers Next 15) : `revalidate = 300` sur `app/sorties/[slug]/page.tsx`, `cookies()` réservé aux routes de compte pour les garder dynamiques.
 
-### Reponse
-
+Fichiers cibles dans `smaurier/tribuzen` :
 ```
-1. Variantes de cache :
-   - 2 langues (fr, en) x 2 devices (desktop, mobile) = 4 variantes
-   - Soit 4 entrees de cache pour /produit/42
-
-2. Header Vary :
-   Vary: Accept-Language, Accept-Encoding
-   (Note : pas Vary: User-Agent car trop de variantes.
-    Utiliser une logique de cache-key qui normalise en "mobile"/"desktop")
-
-3. Temps CPU economise :
-   - 100 000 requetes/jour
-   - 95% en cache = 95 000 HIT (0ms SSR) + 5 000 MISS (150ms SSR)
-   - SANS cache : 100 000 x 150ms = 15 000 000 ms = 4.17 heures CPU/jour
-   - AVEC cache : 5 000 x 150ms = 750 000 ms = 12.5 minutes CPU/jour
-   - Economie : ~4 heures de CPU par jour pour UNE page !
-
-4. Headers optimaux :
-   Cache-Control: public, max-age=30, stale-while-revalidate=60
-   CDN-Cache-Control: max-age=300
-   Surrogate-Key: product-42 products
-
-5. Personnalisation "Bonjour Alice" :
-   - Option A : ne PAS inclure le nom dans le HTML SSR.
-     Le charger cote client via JS apres hydration.
-     Le HTML cache est generique ("Bonjour" sans nom).
-
-   - Option B : Edge-Side Includes (ESI).
-     Le CDN assemble : <esi:include src="/fragment/user-greeting"/>
-     Le fragment /fragment/user-greeting est private, no-cache.
-     Le reste de la page est cachable.
-
-   - Option C : cacher le "shell" public et injecter
-     les parties privees via un appel API cote client.
-     Cache-Control: public pour le HTML,
-     Cache-Control: private pour /api/user/greeting.
+tribuzen/
+  ssr/src/routes/sortie.ts          # rendu SSR + cache de rendu (Express) — Exemple 1
+  ssr/src/render/renderSortie.ts    # fetch + assemblage HTML (og:title inclus)
+  infra/cdn.rules                   # s-maxage=300 sur /sorties/*, private sur /mon-compte
 ```
 
 ---
 
-## Navigation
+## 6. Points clés
 
-| Précédent | Suivant |
-|:---------:|:-------:|
-| [Module 09 — Cache multi-couches](./09-cache-multi-couches.md) | [Module 11 — ISR & SSG](./11-isr-ssg.md) |
+1. Le SSR rend le HTML **à la requête** : le contenu est dans le premier octet → SEO et aperçu social corrects, **FCP précoce**.
+2. Le SSR **augmente le TTFB brut** ; il ne redevient bon **qu'avec un cache de rendu** (`s-maxage` au CDN, ou `revalidate` côté framework).
+3. L'**hydration** rend le HTML SSR interactif après coup — entre les deux, l'« uncanny valley » : visible mais inerte.
+4. On ne cache en **partagé** que ce qui est **identique pour tous** : page entière si publique, sinon **cache de fragment** (le perso sort dans un fragment `private`).
+5. `Vary: Accept-Encoding`/`Accept-Language` = variantes légitimes ; **`Vary: Cookie` et `Vary: *` tuent le cache** — page dépendant du cookie → `private, no-store`.
+6. Next 15 : `fetch()` **n'est plus caché par défaut** — opt-in via `cache: 'force-cache'` ou `next: { revalidate: N }` ; `revalidate`/`dynamic` pilotent le Full Route Cache.
+7. Lire `cookies()`/`headers()` rend une route Next **dynamique** (jamais cachée) — équivalent framework de la règle « pas de cache partagé pour le perso ».
 
 ---
 
-<!-- parcours-recommande -->
+## 7. Seeds Anki
 
-::: tip Parcours recommandé
-1. **Screencast** : [screencast 10 ssr](../screencasts/screencast-10-ssr.md)
-2. **Lab** : [lab-10-ssr-from-scratch](../labs/lab-10-ssr-from-scratch/README)
-3. **Visualisation** : [SSR & Hydration](../visualizations/ssr-hydration.html)
-4. **Quiz** : [quiz 10 ssr](../quizzes/quiz-10-ssr.html)
-:::
+```
+Le SSR rend-il une page « plus rapide » ? Sur quelle métrique exactement ?|Le SSR améliore le FCP et le SEO (le contenu est dans le premier octet). Il AUGMENTE le TTFB brut (le serveur rend au lieu de servir un statique). Le TTFB ne redevient bon qu'avec un cache de rendu (s-maxage au CDN / revalidate). SSR ≠ « plus rapide partout ».
+Pourquoi un HTML SSR public se cache-t-il avec s-maxage=300, max-age=0 ?|s-maxage=300 fait porter le cache par le CDN (partagé) : l'origine ne rend qu'au premier hit, TTFB quasi statique pour l'utilisateur. max-age=0 empêche le navigateur de figer sa propre copie du HTML (qui porte l'état de la page).
+Comment cacher une page SSR à la fois publique et personnalisée (« Bonjour Alice ») ?|On sort le perso du HTML SSR : le corps public est rendu et caché (s-maxage), le nom/avatar est injecté côté client via un appel API private (cache de fragment). Alternative : ESI, où le CDN assemble corps public caché + fragment perso non caché.
+Pourquoi Vary: Cookie est-il un anti-pattern sur du HTML SSR à cacher ?|Chaque utilisateur a un cookie différent → une entrée de cache par utilisateur → taux de hit ≈ 0. Le cache ne partage plus rien. Si la page dépend du cookie de session, elle n'est pas cachable en cache partagé : private, no-store.
+Quel est le défaut de cache de fetch() dans Next 15 App Router ?|fetch() N'EST PAS caché par défaut (changement vs Next 13/14). La route est rendue dynamiquement. On active le cache explicitement : cache: 'force-cache' (Data Cache) ou next: { revalidate: N } (revalidation temporelle).
+Que se passe-t-il si on lit cookies() ou headers() dans une page Next qu'on voulait cacher ?|La route bascule automatiquement en dynamique : rendue à chaque requête, jamais cachée. Un export revalidate est alors ignoré. C'est voulu pour le perso, mais un oubli casse le cache d'une page publique.
+Qu'est-ce que l'« uncanny valley » de l'hydration ?|La fenêtre entre l'affichage du HTML SSR (visible) et la fin de l'hydration (interactif). La page ressemble à une page interactive mais ne l'est pas : un clic ne fait rien tant que le JS n'a pas rattaché les gestionnaires d'événements.
+Différence entre Full Route Cache et Data Cache dans Next.js ?|Data Cache : cache le résultat des fetch opt-in (cache: 'force-cache' ou next.revalidate), indépendamment de la route. Full Route Cache : cache le résultat rendu d'une route (HTML + payload RSC), piloté par revalidate/dynamic sur le segment.
+```
+
+---
+
+## Pont vers le lab
+
+> Lab associé : `11-http-caching/labs/lab-10-ssr/README.md`. Construire un vrai serveur SSR Express qui rend la page publique d'une sortie TribuZen (contenu dans le premier octet), y ajouter un cache de rendu en mémoire, puis mesurer l'effet sur le TTFB avec `curl -w` et l'onglet Network de DevTools (`Server-Timing`, `X-Render-Cache: HIT/MISS`).

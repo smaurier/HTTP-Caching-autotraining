@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quiz 10 — SSR & Caching</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; padding: 2rem 1rem; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { text-align: center; margin-bottom: 0.5rem; font-size: 1.8rem; color: #ffffff; }
+    .subtitle { text-align: center; color: #8892b0; margin-bottom: 2rem; font-size: 1rem; }
+    .progress-bar-container { background: #0d1117; border-radius: 10px; height: 14px; margin-bottom: 2rem; overflow: hidden; }
+    .progress-bar { background: linear-gradient(90deg, #0d6efd, #4dabf7); height: 100%; width: 0%; border-radius: 10px; transition: width 0.4s ease; }
+    .progress-text { text-align: center; color: #8892b0; margin-bottom: 1rem; font-size: 0.9rem; }
+    .card { background: #16213e; border-radius: 12px; padding: 2rem; margin-bottom: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+    .question-label { font-size: 0.85rem; color: #4dabf7; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem; }
+    .question-text { font-size: 1.15rem; margin-bottom: 1.2rem; line-height: 1.5; color: #ffffff; }
+    pre { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; margin-bottom: 1.2rem; overflow-x: auto; font-size: 0.95rem; }
+    code { font-family: 'Consolas', 'Fira Code', 'Courier New', monospace; color: #c9d1d9; }
+    .options { list-style: none; }
+    .options li { margin-bottom: 0.5rem; }
+    .options label { display: flex; align-items: center; gap: 0.75rem; padding: 0.8rem 1rem; background: #0d1117; border: 2px solid #30363d; border-radius: 8px; cursor: pointer; transition: border-color 0.2s, background 0.2s; font-size: 1rem; }
+    .options label:hover { border-color: #4dabf7; background: #1c2a4a; }
+    .options input[type="radio"] { accent-color: #0d6efd; width: 18px; height: 18px; flex-shrink: 0; }
+    .btn { display: inline-block; padding: 0.7rem 2rem; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background 0.2s, transform 0.1s; }
+    .btn-primary { background: #0d6efd; color: #fff; }
+    .btn-primary:hover { background: #3b82f6; }
+    .btn-primary:disabled { background: #374151; cursor: not-allowed; }
+    .btn-restart { background: #238636; color: #fff; margin-top: 1rem; padding: 0.7rem 2rem; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; }
+    .btn-restart:hover { background: #2ea043; }
+    .feedback { margin-top: 1rem; padding: 1rem 1.2rem; border-radius: 8px; font-size: 0.95rem; line-height: 1.5; display: none; }
+    .feedback.correct { background: #0f5132; border: 1px solid #198754; color: #d1fae5; display: block; }
+    .feedback.wrong { background: #842029; border: 1px solid #dc3545; color: #fdd; display: block; }
+    .score-card { text-align: center; padding: 3rem 2rem; }
+    .score-card .score { font-size: 3rem; font-weight: 700; color: #4dabf7; margin-bottom: 0.5rem; }
+    .score-card .score-label { font-size: 1.2rem; color: #8892b0; margin-bottom: 1.5rem; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Quiz 10 — SSR & Caching</h1>
+    <p class="subtitle">Server-Side Rendering, hydration, streaming SSR et stratégies de cache</p>
+    <div class="progress-bar-container"><div class="progress-bar" id="progressBar"></div></div>
+    <p class="progress-text" id="progressText">Question 1 / 5</p>
+    <div id="quizContainer"></div>
+    <div id="scoreContainer" class="card score-card hidden"></div>
+  </div>
+  <script>
+    const questions = [
+      {
+        label: "Concept",
+        text: "Quel est le principal défi du caching avec le Server-Side Rendering (SSR) ?",
+        code: null,
+        options: [
+          "Le SSR ne supporte pas les headers HTTP",
+          "Les pages SSR sont souvent personnalisées par utilisateur (authentification, préférences), rendant le caching en cache partagé (CDN) difficile sans servir du contenu d'un utilisateur à un autre",
+          "Le SSR est trop lent pour que le cache soit utile",
+          "Les navigateurs ne cachent pas les pages HTML"
+        ],
+        answer: 1,
+        explanation: "Le SSR génère du HTML personnalisé (nom d'utilisateur, panier, préférences). Si on cache cette page en CDN, un autre utilisateur pourrait voir les données de quelqu'un d'autre. Solutions : (1) cacher la coquille commune et hydrater le contenu personnalisé côté client ; (2) utiliser des Edge Includes (ESI) ; (3) ne cacher que les pages publiques."
+      },
+      {
+        label: "Concept",
+        text: "Qu'est-ce que l'hydration dans le contexte du SSR et quel est son impact sur la performance perçue ?",
+        code: null,
+        options: [
+          "C'est le processus de compression du HTML côté serveur",
+          "C'est le moment où le JavaScript côté client prend le relais du HTML rendu par le serveur, attachant les event listeners et rendant la page interactive",
+          "C'est le chargement des images en lazy loading",
+          "C'est le pré-remplissage du cache navigateur avec les données SSR"
+        ],
+        answer: 1,
+        explanation: "L'hydration est le processus par lequel React/Vue/Angular côté client « adopte » le HTML rendu par le serveur. Le HTML est visible immédiatement (bon FCP), mais la page n'est interactive qu'après l'hydration (TTI). Si l'hydration est lente, l'utilisateur voit la page mais les boutons ne répondent pas (« uncanny valley »). Le streaming SSR et le selective hydration améliorent cela."
+      },
+      {
+        label: "Prédiction",
+        text: "Cette page Next.js utilise le streaming SSR avec React Suspense. Dans quel ordre le navigateur reçoit-il le contenu ?",
+        code: "// app/products/page.tsx (Next.js App Router)\nimport { Suspense } from 'react';\n\nexport default function ProductsPage() {\n  return (\n    <main>\n      <h1>Nos Produits</h1>           {/* Rendu immédiat */}\n      <Suspense fallback={<Spinner />}>\n        <ProductList />                {/* fetch async : 800ms */}\n      </Suspense>\n      <Suspense fallback={<Spinner />}>\n        <Recommendations />            {/* fetch async : 2000ms */}\n      </Suspense>\n      <Footer />                       {/* Rendu immédiat */}\n    </main>\n  );\n}",
+        options: [
+          "Tout arrive en un seul bloc après 2000ms",
+          "h1 + Footer + Spinners arrivent immédiatement, ProductList remplace son spinner à ~800ms, Recommendations remplace le sien à ~2000ms",
+          "ProductList arrive d'abord, puis Recommendations, puis le reste",
+          "Chaque composant fait une requête HTTP séparée"
+        ],
+        answer: 1,
+        explanation: "Avec le streaming SSR, le serveur envoie le HTML au fur et à mesure. Le shell (h1, Footer, spinners de fallback) est envoyé immédiatement. Quand ProductList termine son fetch (~800ms), le serveur envoie un chunk HTML qui remplace le spinner. Idem pour Recommendations à ~2000ms. L'utilisateur voit du contenu progressivement, améliorant le FCP et le LCP."
+      },
+      {
+        label: "Code",
+        text: "Ce code Next.js configure le caching d'une page SSR. Quel sera le comportement du CDN Vercel ?",
+        code: "// app/blog/[slug]/page.tsx\nexport const dynamic = 'force-dynamic'; // SSR à chaque requête\n\nexport default async function BlogPost({ params }) {\n  const post = await fetch(\n    `https://cms.example.com/posts/${params.slug}`,\n    { next: { revalidate: 60 } } // ISR-like au niveau fetch\n  );\n  const data = await post.json();\n\n  return (\n    <article>\n      <h1>{data.title}</h1>\n      <div>{data.content}</div>\n    </article>\n  );\n}\n\n// Header de réponse généré par Next.js :\n// Cache-Control: private, no-cache, no-store, max-age=0, must-revalidate",
+        options: [
+          "Le CDN cache la page pendant 60 secondes grâce au revalidate",
+          "Le CDN ne cache PAS la page car force-dynamic génère des headers no-store ; le revalidate=60 ne s'applique qu'au cache de données interne de Next.js, pas au HTTP cache",
+          "Le CDN cache indéfiniment car il ignore Cache-Control",
+          "Le CDN cache pendant 0 secondes puis revalide"
+        ],
+        answer: 1,
+        explanation: "force-dynamic force le SSR à chaque requête et génère Cache-Control: private, no-cache, no-store. Le CDN ne cache pas. Le { next: { revalidate: 60 } } sur le fetch() contrôle uniquement le Data Cache interne de Next.js (combien de temps Next.js garde le résultat du fetch CMS en mémoire). Ce sont deux couches de cache distinctes."
+      },
+      {
+        label: "Pourquoi ?",
+        text: "Pourquoi le streaming SSR est-il considéré comme une avancée majeure pour le caching de pages dynamiques ?",
+        code: null,
+        options: [
+          "Parce qu'il élimine le besoin de JavaScript côté client",
+          "Parce qu'il permet de cacher les parties statiques de la page (shell) séparément des parties dynamiques, et de commencer l'envoi du HTML avant que toutes les données soient prêtes, améliorant TTFB et FCP",
+          "Parce qu'il compresse mieux les données que le SSR classique",
+          "Parce qu'il fonctionne sans serveur"
+        ],
+        answer: 1,
+        explanation: "Le streaming SSR décompose la page en chunks. Le shell statique (header, layout, footer) peut être caché en CDN et envoyé instantanément. Les zones dynamiques (contenu personnalisé, données API) sont streamées au fur et à mesure. Le TTFB (Time To First Byte) est quasi-instantané au lieu d'attendre que TOUTES les données soient prêtes. C'est le meilleur des deux mondes : performance du cache + fraîcheur des données."
+      }
+    ];
+    let currentQuestion = 0, score = 0, answered = false;
+    function renderQuestion() {
+      answered = false;
+      const q = questions[currentQuestion];
+      document.getElementById('progressBar').style.width = ((currentQuestion / questions.length) * 100) + '%';
+      document.getElementById('progressText').textContent = `Question ${currentQuestion + 1} / ${questions.length}`;
+      let html = `<div class="card"><p class="question-label">${q.label} — Question ${currentQuestion + 1}</p><p class="question-text">${q.text}</p>`;
+      if (q.code) html += `<pre><code>${q.code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></pre>`;
+      html += `<ul class="options">`;
+      q.options.forEach((opt, i) => { html += `<li><label><input type="radio" name="q${currentQuestion}" value="${i}"><span>${opt}</span></label></li>`; });
+      html += `</ul><div style="margin-top:1rem;"><button class="btn btn-primary" id="validateBtn" onclick="validate()">Valider</button></div><div class="feedback" id="feedback"></div></div>`;
+      document.getElementById('quizContainer').innerHTML = html;
+    }
+    function validate() {
+      if (answered) { nextQuestion(); return; }
+      const sel = document.querySelector(`input[name="q${currentQuestion}"]:checked`);
+      if (!sel) return;
+      answered = true;
+      const val = parseInt(sel.value), q = questions[currentQuestion], fb = document.getElementById('feedback'), btn = document.getElementById('validateBtn');
+      document.querySelectorAll(`input[name="q${currentQuestion}"]`).forEach(r => r.disabled = true);
+      if (val === q.answer) { score++; fb.className = 'feedback correct'; fb.innerHTML = `<strong>Correct !</strong><br>${q.explanation}`; }
+      else { fb.className = 'feedback wrong'; fb.innerHTML = `<strong>Incorrect</strong> — La bonne réponse était : <em>${q.options[q.answer]}</em><br><br>${q.explanation}`; }
+      btn.textContent = currentQuestion < questions.length - 1 ? 'Suivant' : 'Voir le score';
+    }
+    function nextQuestion() { currentQuestion++; if (currentQuestion < questions.length) renderQuestion(); else showScore(); }
+    function showScore() {
+      document.getElementById('quizContainer').classList.add('hidden');
+      document.getElementById('progressBar').style.width = '100%';
+      document.getElementById('progressText').textContent = 'Terminé !';
+      const sc = document.getElementById('scoreContainer'); sc.classList.remove('hidden');
+      sc.innerHTML = `<div class="score">${score} / ${questions.length}</div><p class="score-label">${score === questions.length ? 'Parfait ! Excellente maîtrise !' : score >= 3 ? 'Bon travail ! Révisez les points manqués.' : 'Continuez à étudier, vous progresserez !'}</p><button class="btn-restart" onclick="restart()">Recommencer</button>`;
+    }
+    function restart() { currentQuestion = 0; score = 0; document.getElementById('scoreContainer').classList.add('hidden'); document.getElementById('quizContainer').classList.remove('hidden'); renderQuestion(); }
+    renderQuestion();
+  </script>
+</body>
+</html>

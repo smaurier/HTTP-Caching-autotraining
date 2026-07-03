@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pipeline SSR anime</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column}
+  header{background:#16213e;padding:18px 30px;border-bottom:2px solid #0f3460;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  header h1{font-size:1.4rem;color:#e94560;letter-spacing:.5px}
+  .controls{display:flex;gap:8px}
+  .controls button{background:#0f3460;color:#e0e0e0;border:1px solid #e94560;padding:7px 18px;border-radius:6px;cursor:pointer;font-size:.85rem;transition:all .2s}
+  .controls button:hover{background:#e94560;color:#fff}
+  .controls button.active{background:#e94560;color:#fff}
+  .scenarios{display:flex;gap:8px;flex-wrap:wrap}
+  .scenarios button{background:#0f3460;color:#e0e0e0;border:1px solid #533483;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:.8rem;transition:all .2s}
+  .scenarios button:hover,.scenarios button.active{background:#533483;color:#fff}
+  .main{flex:1;display:flex;flex-direction:column;padding:20px 30px;gap:16px;overflow:auto}
+
+  /* Pipeline area */
+  .pipeline{display:flex;gap:0;background:#16213e;border-radius:12px;border:1px solid #0f3460;overflow:hidden;min-height:260px}
+  .pipe-section{flex:1;padding:16px 12px;text-align:center;border-right:1px dashed #0f3460;display:flex;flex-direction:column;align-items:center;gap:8px;position:relative}
+  .pipe-section:last-child{border-right:none}
+  .pipe-icon{font-size:2rem;opacity:.6}
+  .pipe-title{font-size:.85rem;font-weight:700;letter-spacing:.3px}
+  .pipe-box{width:90%;background:#1a1a2e;border:2px solid #333;border-radius:8px;padding:12px 8px;min-height:80px;transition:all .5s;display:flex;flex-direction:column;justify-content:center;gap:4px}
+  .pipe-box.active{border-color:#e94560;box-shadow:0 0 20px rgba(233,69,96,.3)}
+  .pipe-box.done{border-color:#4ecca3;box-shadow:0 0 15px rgba(78,204,163,.2)}
+  .pipe-box.uncanny{border-color:#f0a030;box-shadow:0 0 20px rgba(240,160,48,.3)}
+  .pipe-box.streaming{border-color:#533483;box-shadow:0 0 20px rgba(83,52,131,.4)}
+  .pipe-status{font-size:.82rem;font-weight:600}
+  .pipe-status.active{color:#e94560}
+  .pipe-status.done{color:#4ecca3}
+  .pipe-status.uncanny{color:#f0a030}
+  .pipe-status.streaming{color:#533483}
+  .pipe-detail{font-size:.72rem;color:#999}
+  .pipe-progress{width:80%;height:4px;background:#0f3460;border-radius:2px;margin:4px auto 0;overflow:hidden}
+  .pipe-progress .fill{height:100%;border-radius:2px;transition:width .5s;width:0}
+
+  /* Browser preview */
+  .preview-area{display:flex;gap:16px;min-height:180px}
+  .browser-mock{flex:2;background:#16213e;border-radius:12px;border:1px solid #0f3460;overflow:hidden;display:flex;flex-direction:column}
+  .browser-bar{background:#0f3460;padding:8px 14px;display:flex;align-items:center;gap:8px}
+  .browser-dots{display:flex;gap:4px}
+  .browser-dots span{width:10px;height:10px;border-radius:50%;background:#333}
+  .browser-dots span:nth-child(1){background:#e94560}
+  .browser-dots span:nth-child(2){background:#f0a030}
+  .browser-dots span:nth-child(3){background:#4ecca3}
+  .browser-url{flex:1;background:#1a1a2e;border-radius:4px;padding:3px 10px;font-size:.72rem;color:#888;font-family:monospace}
+  .browser-content{flex:1;padding:16px;display:flex;flex-direction:column;gap:8px;position:relative}
+  .mock-el{border-radius:6px;padding:10px;transition:all .5s;font-size:.8rem;text-align:center}
+  .mock-el.empty{background:#1a1a2e;border:1px dashed #333;color:#555}
+  .mock-el.rendered{background:#1a1a2e;border:1px solid #4ecca3;color:#ccc}
+  .mock-el.hydrated{background:#1a3a2e;border:1px solid #4ecca3;color:#4ecca3;cursor:pointer}
+  .mock-el.uncanny{background:#1a1a2e;border:1px solid #f0a030;color:#f0a030;cursor:not-allowed}
+  .mock-el.streaming-partial{background:#1a1a2e;border:1px solid #533483;color:#b0b0b0}
+  .uncanny-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(26,26,46,.7);border-radius:0 0 12px 12px;opacity:0;transition:opacity .3s;pointer-events:none}
+  .uncanny-overlay.visible{opacity:1}
+  .uncanny-overlay span{background:#f0a030;color:#1a1a2e;padding:8px 18px;border-radius:6px;font-weight:700;font-size:.9rem}
+
+  /* Info panel */
+  .info-panel{flex:1;min-width:280px;background:#16213e;border-radius:12px;border:1px solid #0f3460;padding:18px;overflow:auto}
+  .info-panel h3{color:#e94560;margin-bottom:8px}
+  .info-panel .step-title{color:#4ecca3;margin-bottom:6px;font-size:.92rem}
+  .info-panel .step-desc{color:#ccc;font-size:.85rem;line-height:1.6;white-space:pre-wrap}
+  .info-panel .headers{background:#1a1a2e;border-radius:8px;padding:10px;margin-top:8px;font-family:'Courier New',monospace;font-size:.75rem;color:#e94560;white-space:pre-wrap}
+
+  /* Timeline bar */
+  .timeline-bar{background:#16213e;border-radius:12px;border:1px solid #0f3460;padding:14px 20px}
+  .tl-header{display:flex;justify-content:space-between;font-size:.8rem;color:#999;margin-bottom:6px}
+  .tl-track{height:28px;background:#1a1a2e;border-radius:4px;display:flex;overflow:hidden;position:relative}
+  .tl-segment{height:100%;display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:600;transition:width .5s,opacity .5s;overflow:hidden;white-space:nowrap;opacity:0}
+  .tl-segment.visible{opacity:1}
+  .tl-labels{display:flex;margin-top:4px}
+  .tl-label{font-size:.65rem;color:#888;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <h1>Pipeline SSR & Hydratation</h1>
+  <div class="scenarios">
+    <button class="active" onclick="loadScenario(0)">1. SSR Traditionnel</button>
+    <button onclick="loadScenario(1)">2. Streaming SSR</button>
+  </div>
+  <div class="controls">
+    <button onclick="play()" id="btnPlay">Lecture</button>
+    <button onclick="doPause()" id="btnPause">Pause</button>
+    <button onclick="doStep()" id="btnStep">Etape</button>
+    <button onclick="doReset()" id="btnReset">Reset</button>
+  </div>
+</header>
+<div class="main">
+  <div class="pipeline" id="pipeline">
+    <div class="pipe-section">
+      <div class="pipe-icon">&#x1F5A5;&#xFE0F;</div>
+      <div class="pipe-title" style="color:#e94560">Serveur</div>
+      <div class="pipe-box" id="pipeServer">
+        <div class="pipe-status" id="pipeServerStatus">En attente</div>
+        <div class="pipe-detail" id="pipeServerDetail">-</div>
+        <div class="pipe-progress"><div class="fill" id="pipeServerFill" style="background:#e94560"></div></div>
+      </div>
+    </div>
+    <div class="pipe-section">
+      <div class="pipe-icon">&#x1F310;</div>
+      <div class="pipe-title" style="color:#533483">Reseau</div>
+      <div class="pipe-box" id="pipeNetwork">
+        <div class="pipe-status" id="pipeNetworkStatus">En attente</div>
+        <div class="pipe-detail" id="pipeNetworkDetail">-</div>
+        <div class="pipe-progress"><div class="fill" id="pipeNetworkFill" style="background:#533483"></div></div>
+      </div>
+    </div>
+    <div class="pipe-section">
+      <div class="pipe-icon">&#x1F4C4;</div>
+      <div class="pipe-title" style="color:#f0a030">Parsing</div>
+      <div class="pipe-box" id="pipeParse">
+        <div class="pipe-status" id="pipeParseStatus">En attente</div>
+        <div class="pipe-detail" id="pipeParseDetail">-</div>
+        <div class="pipe-progress"><div class="fill" id="pipeParseFill" style="background:#f0a030"></div></div>
+      </div>
+    </div>
+    <div class="pipe-section">
+      <div class="pipe-icon">&#x1F4A7;</div>
+      <div class="pipe-title" style="color:#4ecca3">Hydratation</div>
+      <div class="pipe-box" id="pipeHydrate">
+        <div class="pipe-status" id="pipeHydrateStatus">En attente</div>
+        <div class="pipe-detail" id="pipeHydrateDetail">-</div>
+        <div class="pipe-progress"><div class="fill" id="pipeHydrateFill" style="background:#4ecca3"></div></div>
+      </div>
+    </div>
+    <div class="pipe-section">
+      <div class="pipe-icon">&#x2705;</div>
+      <div class="pipe-title" style="color:#4ecca3">Interactif</div>
+      <div class="pipe-box" id="pipeInteractive">
+        <div class="pipe-status" id="pipeInteractiveStatus">En attente</div>
+        <div class="pipe-detail" id="pipeInteractiveDetail">-</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="preview-area">
+    <div class="browser-mock">
+      <div class="browser-bar">
+        <div class="browser-dots"><span></span><span></span><span></span></div>
+        <div class="browser-url">https://app.exemple.fr/dashboard</div>
+      </div>
+      <div class="browser-content" id="browserContent">
+        <div class="mock-el empty" id="mockNav">Navigation</div>
+        <div class="mock-el empty" id="mockHero">Contenu principal</div>
+        <div class="mock-el empty" id="mockBtn">Bouton d'action</div>
+        <div class="uncanny-overlay" id="uncannyOverlay"><span>Visible mais NON interactif</span></div>
+      </div>
+    </div>
+    <div class="info-panel" id="infoPanel">
+      <h3>Explication</h3>
+      <div class="step-title" id="stepTitle">Pipeline SSR</div>
+      <div class="step-desc" id="stepDesc">Cette visualisation montre le pipeline de rendu cote serveur (SSR) et le processus d'hydratation. Selectionnez un scenario pour comparer le SSR traditionnel et le Streaming SSR.</div>
+      <div class="headers" id="headersBlock" style="display:none"></div>
+    </div>
+  </div>
+
+  <div class="timeline-bar">
+    <div class="tl-header">
+      <span>Timeline (ms)</span>
+      <span id="tlTotal">0ms</span>
+    </div>
+    <div class="tl-track" id="tlTrack"></div>
+  </div>
+</div>
+<script>
+function setPipe(id,cls,status,detail,progress){
+  const box=document.getElementById('pipe'+id);
+  box.className='pipe-box'+(cls?' '+cls:'');
+  document.getElementById('pipe'+id+'Status').textContent=status;
+  document.getElementById('pipe'+id+'Status').className='pipe-status'+(cls?' '+cls:'');
+  document.getElementById('pipe'+id+'Detail').textContent=detail;
+  const fill=document.getElementById('pipe'+id+'Fill');
+  if(fill)fill.style.width=(progress||0)+'%';
+}
+
+function setMock(id,cls,text){
+  const el=document.getElementById(id);
+  el.className='mock-el '+cls;
+  if(text)el.textContent=text;
+}
+
+function setUncanny(v){document.getElementById('uncannyOverlay').classList.toggle('visible',v);}
+
+function setTimeline(segments){
+  const track=document.getElementById('tlTrack');
+  track.innerHTML='';
+  let total=0;
+  segments.forEach(s=>total+=s.dur);
+  document.getElementById('tlTotal').textContent=total+'ms';
+  segments.forEach(s=>{
+    const d=document.createElement('div');
+    d.className='tl-segment'+(s.visible?' visible':'');
+    d.style.width=(s.dur/total*100)+'%';
+    d.style.background=s.color;
+    d.style.color=s.textColor||'#fff';
+    d.textContent=s.label+' ('+s.dur+'ms)';
+    track.appendChild(d);
+  });
+}
+
+const scenarios=[
+  {
+    name:"SSR Traditionnel",
+    steps:[
+      {server:{cls:'active',s:'Rendu en cours...',d:'Execution de React/Vue sur le serveur',p:30},network:{cls:'',s:'En attente',d:'Le serveur n\'a pas encore fini',p:0},parse:{cls:'',s:'En attente',d:'-',p:0},hydrate:{cls:'',s:'En attente',d:'-',p:0},interactive:{cls:'',s:'En attente',d:'-'},mocks:[['mockNav','empty','Navigation'],['mockHero','empty','Contenu principal'],['mockBtn','empty','Bouton d\'action']],uncanny:false,title:"Rendu serveur en cours",desc:"Le serveur execute le framework (React, Vue, Angular...) pour generer le HTML complet de la page.\nPendant ce temps, le navigateur attend : l'ecran est VIDE.\n\nProbleme : tout le rendu doit etre termine avant l'envoi.",headers:"Serveur: renderToString()\nTemps: ~200ms\nNavigateur: ecran blanc",tl:[{dur:200,color:'#e94560',label:'Serveur',visible:true}]},
+      {server:{cls:'done',s:'Termine',d:'HTML complet genere (45 Ko)',p:100},network:{cls:'active',s:'Transfert...',d:'Envoi du HTML complet',p:50},parse:{cls:'',s:'En attente',d:'-',p:0},hydrate:{cls:'',s:'En attente',d:'-',p:0},interactive:{cls:'',s:'En attente',d:'-'},mocks:[['mockNav','empty','Navigation'],['mockHero','empty','...'],['mockBtn','empty','...']],uncanny:false,title:"Transfert du HTML complet",desc:"Le serveur a fini le rendu et envoie le HTML complet en une seule fois.\nLe navigateur commence a recevoir les donnees.\n\nAvec HTTP/2, le transfert est multiplex mais le HTML est envoye d'un bloc.",headers:"HTTP/2 200 OK\nContent-Type: text/html\nContent-Length: 45000\nTransfer: un seul bloc",tl:[{dur:200,color:'#e94560',label:'Serveur',visible:true},{dur:80,color:'#533483',label:'Reseau',visible:true}]},
+      {server:{cls:'done',s:'Termine',d:'',p:100},network:{cls:'done',s:'Termine',d:'45 Ko recus',p:100},parse:{cls:'active',s:'Parsing HTML...',d:'Construction du DOM',p:50},hydrate:{cls:'',s:'En attente',d:'-',p:0},interactive:{cls:'',s:'En attente',d:'-'},mocks:[['mockNav','rendered','Navigation'],['mockHero','rendered','Contenu principal'],['mockBtn','uncanny','Bouton (non interactif)']],uncanny:true,title:"Parsing HTML + \"Uncanny Valley\"",desc:"Le navigateur parse le HTML et affiche le contenu.\nLes elements sont VISIBLES mais PAS INTERACTIFS.\nC'est l' \"Uncanny Valley\" : l'utilisateur voit les boutons mais les clics ne fonctionnent pas.\n\nLe JS n'est pas encore charge et execute.",headers:"DOM construit: 120 elements\nCSS applique: rendu visible\nJS: pas encore charge\n=> VISIBLE mais NON INTERACTIF",tl:[{dur:200,color:'#e94560',label:'Serveur',visible:true},{dur:80,color:'#533483',label:'Reseau',visible:true},{dur:50,color:'#f0a030',label:'Parse',visible:true}]},
+      {server:{cls:'done',s:'Termine',d:'',p:100},network:{cls:'done',s:'Termine',d:'',p:100},parse:{cls:'done',s:'Termine',d:'DOM pret',p:100},hydrate:{cls:'active',s:'Hydratation...',d:'Attachement des event listeners',p:60},interactive:{cls:'',s:'En attente',d:'-'},mocks:[['mockNav','hydrated','Navigation'],['mockHero','rendered','Contenu principal'],['mockBtn','uncanny','Bouton (hydratation...)']],uncanny:true,title:"Hydratation en cours",desc:"React/Vue s'execute cote client et \"hydrate\" le HTML existant :\n- Telechargement du bundle JS\n- Execution du framework\n- Reconciliation avec le DOM existant\n- Attachement des gestionnaires d'evenements\n\nL'hydratation est un processus BLOQUANT : tout est hydrate en une fois.",headers:"bundle.js: 180 Ko (gzip)\nHydratation: reconciliation du DOM\nEvent listeners: attachement en cours\n=> Partiellement interactif",tl:[{dur:200,color:'#e94560',label:'Serveur',visible:true},{dur:80,color:'#533483',label:'Reseau',visible:true},{dur:50,color:'#f0a030',label:'Parse',visible:true},{dur:150,color:'#e9a060',label:'Hydrate',visible:true}]},
+      {server:{cls:'done',s:'Termine',d:'',p:100},network:{cls:'done',s:'Termine',d:'',p:100},parse:{cls:'done',s:'Termine',d:'',p:100},hydrate:{cls:'done',s:'Termine',d:'Hydratation complete',p:100},interactive:{cls:'done',s:'Interactif !',d:'TTI atteint'},mocks:[['mockNav','hydrated','Navigation'],['mockHero','hydrated','Contenu principal'],['mockBtn','hydrated','Bouton (cliquable !)']],uncanny:false,title:"Page totalement interactive (TTI)",desc:"L'hydratation est terminee ! La page est maintenant 100% interactive.\nTous les gestionnaires d'evenements sont actifs.\n\nTemps total (Time To Interactive) : ~480ms\nDont Uncanny Valley : ~200ms (l'utilisateur voit le contenu a ~280ms mais ne peut interagir qu'a ~480ms)\n\nC'est le principal inconvenient du SSR traditionnel : le decalage entre le visuel et l'interactivite.",headers:"TTI: 480ms\nFCP: 280ms\nUncanny Valley: 200ms\n\nMetriques:\n  Serveur: 200ms\n  Reseau: 80ms\n  Parse: 50ms\n  Hydratation: 150ms",tl:[{dur:200,color:'#e94560',label:'Serveur',visible:true},{dur:80,color:'#533483',label:'Reseau',visible:true},{dur:50,color:'#f0a030',label:'Parse',visible:true},{dur:150,color:'#e9a060',label:'Hydrate',visible:true},{dur:0,color:'#4ecca3',label:'Interactif',visible:true}]}
+    ]
+  },
+  {
+    name:"Streaming SSR",
+    steps:[
+      {server:{cls:'streaming',s:'Streaming...',d:'Envoi progressif du HTML',p:20},network:{cls:'streaming',s:'Flux actif',d:'Chunks en cours',p:10},parse:{cls:'',s:'En attente',d:'-',p:0},hydrate:{cls:'',s:'En attente',d:'-',p:0},interactive:{cls:'',s:'En attente',d:'-'},mocks:[['mockNav','empty','...'],['mockHero','empty','...'],['mockBtn','empty','...']],uncanny:false,title:"Streaming SSR demarre",desc:"Le serveur commence a envoyer le HTML au fur et a mesure qu'il est genere.\nPas besoin d'attendre que tout le rendu soit termine !\n\nUtilise renderToPipeableStream() (React 18) ou equivalent.\nLe HTML est envoye en chunks via Transfer-Encoding: chunked.",headers:"HTTP/2 200 OK\nContent-Type: text/html\nTransfer-Encoding: chunked\n\n<html><head>...</head><body>\n<!-- Premier chunk envoye immediatement -->",tl:[{dur:50,color:'#533483',label:'Chunk 1',visible:true}]},
+      {server:{cls:'streaming',s:'Streaming...',d:'Header + Nav generes',p:40},network:{cls:'streaming',s:'Chunk 1 recu',d:'Navigation transmise',p:30},parse:{cls:'active',s:'Parsing...',d:'Premier chunk parse',p:30},hydrate:{cls:'',s:'En attente',d:'-',p:0},interactive:{cls:'',s:'En attente',d:'-'},mocks:[['mockNav','rendered','Navigation'],['mockHero','streaming-partial','Chargement...'],['mockBtn','empty','...']],uncanny:false,title:"Premier chunk : navigation visible",desc:"Le navigateur recoit le premier chunk contenant le header et la navigation.\nIl les affiche IMMEDIATEMENT sans attendre le reste.\n\nL'utilisateur voit deja du contenu ! Le FCP est atteint tres tot.\nPendant ce temps, le serveur continue a generer le reste.",headers:"Chunk 1 recu: <header><nav>...</nav></header>\nFCP: ~80ms (vs 280ms en SSR classique)\n\nLe serveur continue le rendu...",tl:[{dur:50,color:'#533483',label:'Chunk 1',visible:true},{dur:30,color:'#f0a030',label:'Parse 1',visible:true}]},
+      {server:{cls:'streaming',s:'Streaming...',d:'Contenu principal genere',p:70},network:{cls:'streaming',s:'Chunk 2 recu',d:'Contenu transmis',p:60},parse:{cls:'active',s:'Parsing...',d:'Deuxieme chunk',p:60},hydrate:{cls:'active',s:'Hydratation partielle',d:'Navigation hydratee',p:30},interactive:{cls:'',s:'Partiellement',d:'Nav cliquable'},mocks:[['mockNav','hydrated','Navigation (interactive)'],['mockHero','rendered','Contenu principal'],['mockBtn','streaming-partial','Chargement...']],uncanny:false,title:"Hydratation progressive",desc:"Pendant que le serveur envoie le deuxieme chunk (contenu principal),\nle navigateur commence DEJA a hydrater la navigation !\n\nC'est l'hydratation selective/progressive :\nchaque composant est hydrate des qu'il est disponible.\n\nPas d'Uncanny Valley : les elements deviennent interactifs progressivement.",headers:"Chunk 2: <main>...</main>\nNavigation: HYDRATEE (interactive)\nContenu: visible, en cours d'hydratation\nBouton: pas encore recu",tl:[{dur:50,color:'#533483',label:'Chunk 1',visible:true},{dur:30,color:'#f0a030',label:'Parse 1',visible:true},{dur:60,color:'#533483',label:'Chunk 2',visible:true},{dur:40,color:'#4ecca3',label:'Hydrate Nav',visible:true}]},
+      {server:{cls:'done',s:'Termine',d:'Tout le HTML envoye',p:100},network:{cls:'done',s:'Termine',d:'Tous chunks recus',p:100},parse:{cls:'active',s:'Parsing...',d:'Dernier chunk',p:90},hydrate:{cls:'active',s:'Hydratation...',d:'Contenu en cours',p:70},interactive:{cls:'',s:'Progressif',d:'Nav + Hero interactifs'},mocks:[['mockNav','hydrated','Navigation (interactive)'],['mockHero','hydrated','Contenu (interactif)'],['mockBtn','uncanny','Bouton (presque...)']],uncanny:false,title:"Derniers chunks + hydratation continue",desc:"Le serveur a termine l'envoi de tous les chunks.\nLe navigateur parse les derniers elements et continue l'hydratation progressive.\n\nLa navigation et le contenu sont deja interactifs !\nSeul le bouton d'action attend encore l'hydratation.",headers:"Chunks: tous recus\nNavigation: INTERACTIVE\nContenu: INTERACTIF\nBouton: en cours d'hydratation...",tl:[{dur:50,color:'#533483',label:'C1',visible:true},{dur:30,color:'#f0a030',label:'P1',visible:true},{dur:60,color:'#533483',label:'C2',visible:true},{dur:40,color:'#4ecca3',label:'H-Nav',visible:true},{dur:40,color:'#533483',label:'C3',visible:true},{dur:30,color:'#4ecca3',label:'H-Main',visible:true}]},
+      {server:{cls:'done',s:'Termine',d:'',p:100},network:{cls:'done',s:'Termine',d:'',p:100},parse:{cls:'done',s:'Termine',d:'',p:100},hydrate:{cls:'done',s:'Termine',d:'Tout hydrate',p:100},interactive:{cls:'done',s:'Interactif !',d:'TTI complet'},mocks:[['mockNav','hydrated','Navigation (interactive)'],['mockHero','hydrated','Contenu (interactif)'],['mockBtn','hydrated','Bouton (cliquable !)']],uncanny:false,title:"Page totalement interactive",desc:"Tout est hydrate ! La page est 100% interactive.\n\nComparaison avec le SSR traditionnel :\n  SSR classique : FCP=280ms, TTI=480ms, Uncanny Valley=200ms\n  Streaming SSR : FCP=80ms, TTI=320ms, Uncanny Valley=minime\n\nLe streaming SSR offre :\n- Un FCP beaucoup plus rapide (contenu visible 3x plus tot)\n- Un TTI reduit de ~33%\n- Pratiquement aucun Uncanny Valley grace a l'hydratation progressive\n- Une meilleure experience utilisateur percue",headers:"TTI: 320ms (vs 480ms)\nFCP: 80ms (vs 280ms)\nUncanny Valley: ~minime\n\nGains:\n  FCP: -71% plus rapide\n  TTI: -33% plus rapide\n  UX: bien meilleure",tl:[{dur:50,color:'#533483',label:'C1',visible:true},{dur:30,color:'#f0a030',label:'P1',visible:true},{dur:60,color:'#533483',label:'C2',visible:true},{dur:40,color:'#4ecca3',label:'H1',visible:true},{dur:40,color:'#533483',label:'C3',visible:true},{dur:30,color:'#4ecca3',label:'H2',visible:true},{dur:20,color:'#4ecca3',label:'H3',visible:true},{dur:0,color:'#fff',label:'',visible:false}]}
+    ]
+  }
+];
+
+let currentScenario=0,currentStep=-1,playing=false,playTimer=null;
+
+function goToStep(idx){
+  const s=scenarios[currentScenario];
+  if(idx<0||idx>=s.steps.length)return;
+  currentStep=idx;
+  const st=s.steps[idx];
+  setPipe('Server',st.server.cls,st.server.s,st.server.d,st.server.p);
+  setPipe('Network',st.network.cls,st.network.s,st.network.d,st.network.p);
+  setPipe('Parse',st.parse.cls,st.parse.s,st.parse.d,st.parse.p);
+  setPipe('Hydrate',st.hydrate.cls,st.hydrate.s,st.hydrate.d,st.hydrate.p);
+  // Interactive has no progress bar
+  const ib=document.getElementById('pipeInteractive');
+  ib.className='pipe-box'+(st.interactive.cls?' '+st.interactive.cls:'');
+  document.getElementById('pipeInteractiveStatus').textContent=st.interactive.s;
+  document.getElementById('pipeInteractiveStatus').className='pipe-status'+(st.interactive.cls?' '+st.interactive.cls:'');
+  document.getElementById('pipeInteractiveDetail').textContent=st.interactive.d;
+  st.mocks.forEach(m=>setMock(m[0],m[1],m[2]));
+  setUncanny(st.uncanny);
+  document.getElementById('stepTitle').textContent=st.title;
+  document.getElementById('stepDesc').textContent=st.desc;
+  const hb=document.getElementById('headersBlock');hb.style.display='block';hb.textContent=st.headers;
+  if(st.tl)setTimeline(st.tl);
+}
+
+function loadScenario(idx){
+  currentScenario=idx;
+  document.querySelectorAll('.scenarios button').forEach((b,i)=>b.classList.toggle('active',i===idx));
+  doReset();
+}
+
+function doReset(){
+  doPause();currentStep=-1;
+  ['Server','Network','Parse','Hydrate'].forEach(id=>setPipe(id,'','En attente','-',0));
+  const ib=document.getElementById('pipeInteractive');ib.className='pipe-box';
+  document.getElementById('pipeInteractiveStatus').textContent='En attente';
+  document.getElementById('pipeInteractiveDetail').textContent='-';
+  ['mockNav','mockHero','mockBtn'].forEach(id=>setMock(id,'empty',id==='mockNav'?'Navigation':id==='mockHero'?'Contenu principal':'Bouton d\'action'));
+  setUncanny(false);
+  document.getElementById('stepTitle').textContent=scenarios[currentScenario].name;
+  document.getElementById('stepDesc').textContent='Appuyez sur Lecture ou Etape pour demarrer.';
+  document.getElementById('headersBlock').style.display='none';
+  document.getElementById('tlTrack').innerHTML='';
+  document.getElementById('tlTotal').textContent='0ms';
+}
+
+function doStep(){
+  const s=scenarios[currentScenario];
+  if(currentStep<s.steps.length-1)goToStep(currentStep+1);
+}
+
+function play(){
+  if(playing)return;
+  playing=true;
+  document.getElementById('btnPlay').classList.add('active');
+  const tick=()=>{
+    const s=scenarios[currentScenario];
+    if(currentStep<s.steps.length-1){doStep();playTimer=setTimeout(tick,1800);}
+    else{playing=false;document.getElementById('btnPlay').classList.remove('active');}
+  };tick();
+}
+
+function doPause(){
+  playing=false;clearTimeout(playTimer);
+  document.getElementById('btnPlay').classList.remove('active');
+}
+</script>
+</body>
+</html>

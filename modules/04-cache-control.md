@@ -1,1009 +1,439 @@
-# Module 04 — Cache-Control — Le chef d'orchestre
+---
+titre: Cache-Control — piloter la fraîcheur des réponses
+cours: 11-http-caching
+notions: [cache privé vs partagé, freshness lifetime, ordre s-maxage max-age Expires, header Age, max-age, s-maxage, public, private, no-cache, no-store, must-revalidate, proxy-revalidate, immutable, no-transform, must-understand, directives de requête, pattern immutable plus hash, HTML no-cache plus assets immutables, Expires et Pragma legacy]
+outcomes:
+  - sait choisir la bonne combinaison de directives Cache-Control par type de ressource
+  - sait distinguer no-cache de no-store sans se tromper
+  - sait distinguer public de private et protéger une donnée personnelle d'un CDN
+  - sait appliquer le pattern immutable + hash aux assets et no-cache au HTML
+prerequis: [00-prerequis-et-vue-ensemble, 01-protocole-http, 02-http2-http3, 03-en-tetes-http]
+next: 05-etag-validation-conditionnelle
+libs: []
+tribuzen: stratégie Cache-Control TribuZen — assets immutables à hash, HTML no-cache, API privées no-store, annuaire public s-maxage au CDN
+last-reviewed: 2026-07
+---
 
-> **Objectif** : Maîtriser complètement le header Cache-Control, comprendre le cycle de vie d'une réponse cachee, et savoir choisir la bonne combinaison de directives pour chaque situation.
-> **Difficulte** : ⭐⭐ (Intermédiaire)
+# Cache-Control — piloter la fraîcheur des réponses
+
+> **Outcomes — tu sauras FAIRE :** choisir la bonne combinaison de directives `Cache-Control` par type de ressource, distinguer `no-cache` de `no-store` sans jamais te tromper, distinguer `public` de `private`, appliquer le pattern immutable + hash aux assets et `no-cache` au HTML.
+> **Difficulté :** :star::star:
+>
+> **Portée :** ce module couvre **uniquement** l'en-tête `Cache-Control` (et ses voisins legacy `Expires`/`Pragma`, plus `Age`). Le **mécanisme** de revalidation conditionnelle (`ETag`, `If-None-Match`, réponse `304`) est le sujet du **module 05**. La stratégie `stale-while-revalidate` en profondeur est le sujet du **module 06**. Ici on se contente de les **nommer** quand une directive les déclenche.
+
+## 1. Cas concret d'abord
+
+Tu déploies une nouvelle version du front TribuZen. Le fichier de config du serveur applique, partout, la même règle :
+
+```nginx
+# nginx.conf — AVANT (règle unique, catastrophique)
+location / {
+  add_header Cache-Control "public, max-age=31536000";  # 1 an, pour TOUT
+}
+```
+
+Résultat en production, trois incidents le même jour :
+
+1. **Le HTML est figé.** Les utilisateurs qui ont visité le site hier voient encore l'ancien `index.html` qui pointe vers `app.old.js` — supprimé au déploiement. Page blanche, 404 sur le bundle.
+2. **Une donnée privée fuit.** `/api/profile` renvoie le profil d'Alice avec `public, max-age=31536000`. Le CDN le met en cache partagé et le sert à Bob. Fuite de données personnelles.
+3. **Impossible de corriger.** Même en repoussant un fix, les navigateurs ne redemanderont rien avant un an — l'URL `/app.js` n'a pas changé.
+
+Le problème n'est pas le caching : c'est d'appliquer **une seule** directive à des ressources qui ont des besoins **opposés**. Ce module te donne le vocabulaire exact de `Cache-Control` pour traiter chaque type de ressource correctement.
 
 ---
 
-## 1. Le cycle de vie d'une réponse cachee
+## 2. Théorie complète, concise
 
-### 1.1 L'analogie du yaourt dans le frigo
+### 2.1 Le modèle : cache privé vs cache partagé
 
-Une réponse cachee, c'est comme un yaourt dans ton frigo :
+Une réponse HTTP peut être stockée à deux endroits :
 
-```
-ACHAT                PEREMPTION             VERIFICATION
-  |                      |                       |
-  v                      v                       v
-[FRAIS]  ---------->  [PERIME]  ---------->  [ENCORE BON ?]
-(fresh)               (stale)                (revalidation)
+| Type de cache | Où | Sert |
+|---|---|---|
+| **Privé** | Navigateur (mémoire, disque) | Un seul utilisateur |
+| **Partagé** | CDN, proxy inverse, proxy d'entreprise | Tous les utilisateurs |
 
-1. Tu achetes un yaourt (le serveur envoie la reponse)
-2. Le yaourt est frais pendant 7 jours (max-age=604800)
-3. Apres 7 jours, il est perime (stale)
-4. Tu le sens pour verifier s'il est encore bon (revalidation)
-   - Encore bon ? Tu le manges (304 Not Modified)
-   - Plus bon ? Tu en achetes un nouveau (200 OK + nouveau contenu)
-```
+Cette distinction est **le** fil conducteur de tout `Cache-Control`. Certaines directives ne parlent qu'au cache **partagé** (`s-maxage`, `proxy-revalidate`), d'autres l'interdisent (`private`). Une donnée personnelle ne doit **jamais** entrer dans un cache partagé — d'où `private` (ou `no-store`).
 
-### 1.2 Le diagramme complet du cycle de vie
+### 2.2 La fraîcheur (freshness lifetime)
+
+Une réponse en cache a trois états :
 
 ```
-                    Le client demande /page.html
-                              |
-                              v
-                   +---------------------+
-                   | La ressource est-elle|
-                   | dans le cache ?      |
-                   +---------------------+
-                     |                |
-                    NON              OUI
-                     |                |
-                     v                v
-              +----------+   +------------------+
-              | Cache    |   | La copie est-elle|
-              | MISS     |   | encore fraiche ? |
-              +----------+   +------------------+
-                     |          |             |
-                     |         OUI           NON
-                     |          |             |
-                     v          v             v
-              Requete au   Servir depuis  +------------------+
-              serveur      le cache       | REVALIDATION     |
-                  |        (pas de        | Envoyer           |
-                  |         requete       | If-None-Match     |
-                  v         reseau !)     | au serveur        |
-              Reponse                     +------------------+
-              200 OK                        |             |
-                  |                       304 Not       200 OK
-                  |                       Modified      (nouvelle version)
-                  v                         |             |
-              Stocker en                    v             v
-              cache                     Utiliser la   Remplacer dans
-                                        copie locale  le cache
-
-
-LEGENDE :
-=========
-Fresh (frais)  = max-age pas encore expire
-Stale (perime) = max-age expire, mais la copie existe encore
-Revalidation   = demander au serveur si la copie stale est encore bonne
+[FRESH] --------> [STALE] --------> revalidation
+ fraîche          périmée           (demander à l'origine si c'est encore bon)
 ```
 
-### 1.3 Les trois états d'une réponse cachee
+- **Fresh** : `age < freshness lifetime` → servi directement, **zéro requête réseau**.
+- **Stale** : `age >= freshness lifetime` → le cache doit revalider (ou servir stale si c'est explicitement autorisé).
 
-| État        | Condition                        | Action du cache                          |
-|-------------|----------------------------------|------------------------------------------|
-| **Fresh**   | Age < max-age                    | Servir directement, SANS requête réseau  |
-| **Stale**   | Age >= max-age                   | Revalider aupres du serveur              |
-| **Absent**  | Pas dans le cache                | Requête complete au serveur              |
-
-```typescript
-// Exemple : observer l'age d'une reponse
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-
-const CONTENT: string = '<html><body><h1>Page cachee</h1></body></html>';
-const START: number = Date.now();
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  const age: number = Math.floor((Date.now() - START) / 1000);  // Secondes depuis le demarrage
-
-  console.log(`Requete recue a t+${age}s`);
-
-  res.writeHead(200, {
-    'Content-Type': 'text/html',
-    'Cache-Control': 'max-age=10',    // Frais pendant 10 secondes
-    'Date': new Date().toUTCString(), // Horodatage de la reponse
-  });
-  res.end(CONTENT);
-});
-
-server.listen(3000, () => {
-  console.log('http://localhost:3000');
-  console.log('La reponse est fraiche pendant 10 secondes.');
-  console.log('Apres 10s, le navigateur revalidera.');
-});
-```
-
----
-
-## 2. Les directives Cache-Control
-
-### 2.1 Vue d'ensemble
-
-Cache-Control est un header qui accepte une ou plusieurs **directives** separees par des virgules :
+La durée de fraîcheur est calculée avec cet **ordre de priorité** (le premier présent gagne) :
 
 ```
+Cache partagé (CDN/proxy) :   s-maxage > max-age > Expires > heuristique
+Cache privé (navigateur)  :              max-age > Expires > heuristique
+```
+
+`Cache-Control: max-age` (et `s-maxage`) gagne **toujours** sur `Expires` quand les deux sont présents. L'heuristique n'intervient que si aucune durée explicite n'est fournie : le cache **devine** (souvent ~10 % du temps écoulé depuis `Last-Modified`). On ne veut pas dépendre du devinage → on pose toujours un `Cache-Control` explicite.
+
+### 2.3 L'en-tête `Age`
+
+Un cache partagé ajoute `Age` : le nombre de secondes depuis que la réponse a été générée par le serveur d'**origine** (temps passé dans les caches intermédiaires inclus).
+
+```http
+HTTP/1.1 200 OK
+Cache-Control: public, max-age=3600
+Age: 1800
+```
+
+Ici la réponse a `max-age=3600` mais elle est déjà en cache depuis `1800` s. Fraîcheur restante ≈ `3600 - 1800 = 1800` s. En DevTools, `Age` te dit si une réponse vient du serveur (`Age: 0` ou absent) ou d'un CDN (`Age` élevé).
+
+### 2.4 Directives de RÉPONSE (serveur → cache)
+
+```http
 Cache-Control: public, max-age=3600, must-revalidate
-               ^^^^^^  ^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^
-               Directive 1          Directive 2        Directive 3
 ```
 
-### 2.2 Tableau complet des directives
+| Directive | Effet | Portée |
+|---|---|---|
+| `max-age=N` | Fraîche pendant N secondes | tous les caches |
+| `s-maxage=N` | Idem mais **écrase `max-age`** | cache **partagé** uniquement |
+| `public` | Peut être stockée par un cache partagé (débloque aussi le cache des réponses protégées par `Authorization`) | partagé |
+| `private` | Cache **privé** seulement — interdit au CDN/proxy | privé |
+| `no-cache` | Peut être stockée **mais doit être revalidée** auprès de l'origine avant chaque réutilisation | tous |
+| `no-store` | Ne **rien** stocker, nulle part, jamais | tous |
+| `must-revalidate` | Une fois stale, interdit de servir sans revalider (même hors-ligne → erreur) | tous |
+| `proxy-revalidate` | Comme `must-revalidate` | cache **partagé** uniquement |
+| `immutable` | Le corps ne changera pas tant qu'elle est fraîche → pas de revalidation, même au rechargement | tous |
+| `no-transform` | Interdit aux intermédiaires de transformer/recompresser le corps | tous |
+| `must-understand` | Le cache ne stocke que s'il comprend les règles de cache liées au code de statut | tous |
 
-**Directives de REPONSE (serveur -> client) :**
+Deux directives supplémentaires — `stale-while-revalidate=N` et `stale-if-error=N` — autorisent à servir une réponse **stale** dans certaines conditions. On les **nomme** ici ; `stale-while-revalidate` est détaillée au **module 06**.
 
-| Directive            | Valeur    | Description                                                |
-|----------------------|-----------|------------------------------------------------------------|
-| `max-age`            | secondes  | Duree de fraicheur (ex: `max-age=3600` = 1 heure)         |
-| `s-maxage`           | secondes  | Comme max-age mais UNIQUEMENT pour les caches partages     |
-| `no-cache`           | -         | Le cache DOIT revalider à chaque utilisation               |
-| `no-store`           | -         | Ne RIEN stocker dans aucun cache                           |
-| `public`             | -         | Tout le monde peut cacher (y compris CDN, proxies)         |
-| `private`            | -         | Seul le navigateur peut cacher (pas CDN, pas proxy)        |
-| `immutable`          | -         | Le contenu ne changera JAMAIS (pas de revalidation)        |
-| `must-revalidate`    | -         | Une fois stale, INTERDICTION de servir sans revalider      |
-| `proxy-revalidate`   | -         | Comme must-revalidate mais uniquement pour les proxies     |
-| `no-transform`       | -         | Interdire aux proxies de modifier le contenu               |
-| `stale-while-revalidate` | secondes | Servir stale pendant la revalidation en arriere-plan  |
-| `stale-if-error`     | secondes  | Servir stale si le serveur est en panne                    |
+### 2.5 no-cache VS no-store — la confusion n°1
 
-**Directives de REQUETE (client -> serveur) :**
-
-| Directive            | Valeur    | Description                                                |
-|----------------------|-----------|------------------------------------------------------------|
-| `max-age`            | secondes  | "Je n'accepte pas de réponse plus vieille que X secondes"  |
-| `max-stale`          | secondes  | "J'accepte une réponse perimee depuis au plus X secondes"  |
-| `min-fresh`          | secondes  | "Je veux une réponse fraiche pendant encore au moins X s"  |
-| `no-cache`           | -         | "Ne me sers pas du cache sans revalider"                   |
-| `no-store`           | -         | "Ne stocke rien"                                           |
-| `no-transform`       | -         | "Ne modifie pas le contenu"                                |
-| `only-if-cached`     | -         | "Ne me reponds QUE si tu as une copie en cache"            |
-
----
-
-## 3. Les directives en detail
-
-### 3.1 max-age — La date de peremption
+Les noms mentent. **Martèle cette distinction :**
 
 ```
-Cache-Control: max-age=3600
+no-cache  = "STOCKE, mais REVALIDE auprès de l'origine avant de servir"
+            (le cache garde la copie ; il demande "toujours bon ?" à l'origine.
+             Le mécanisme exact — ETag / If-None-Match / 304 — est le module 05.)
+
+no-store  = "NE STOCKE RIEN. Jamais. Nulle part."
+            (chaque requête repart de zéro vers l'origine → 200 complet)
 ```
 
-Signifie : "Cette réponse est fraiche pendant **3600 secondes** (1 heure) à partir de maintenant."
+Piège fatal : écrire `no-cache` en croyant empêcher le **stockage**. `no-cache` **stocke bel et bien** la réponse — y compris sur le disque du navigateur. Pour une donnée sensible (solde bancaire, token), il faut `no-store`, sinon la donnée reste écrite en clair sur la machine de l'utilisateur.
 
 ```
-Temps:   0s         1800s        3600s        5400s
-         |           |            |            |
-         v           v            v            v
-       [FRAIS]---->[FRAIS]---->[STALE]---->[STALE]
-       Reponse     30 min plus  1h plus     1h30 plus
-       recue       tard:        tard:       tard:
-                   toujours     doit        servira
-                   du cache     revalider   stale si
-                                            autorise
+no-cache : la copie est gardée, mais revalidée à chaque usage
+           → souvent un 304 léger (rien à re-télécharger) si rien n'a changé
+           → l'optimisation existe (économise le corps), la fraîcheur est garantie
+
+no-store : rien n'est gardé
+           → 200 complet à chaque requête, aucune optimisation possible
+           → mais aucune trace ne subsiste
 ```
 
-**Valeurs courantes :**
+`no-cache` optimise (un `304` pèse ~200 octets au lieu de 50 Ko). `no-store` n'optimise jamais, mais garantit qu'aucune trace ne reste.
 
-| Scenario                     | max-age       | Duree        |
-|------------------------------|---------------|--------------|
-| Donnees temps-réel (bourse)  | `max-age=0`   | 0 seconde    |
-| Page d'accueil dynamique     | `max-age=60`  | 1 minute     |
-| Page de blog                 | `max-age=3600`| 1 heure      |
-| Image de profil              | `max-age=86400`| 1 jour      |
-| Feuille de style avec hash   | `max-age=31536000` | 1 an   |
-| Fichier JS avec hash         | `max-age=31536000` | 1 an   |
+### 2.6 public VS private
 
-### 3.2 s-maxage — Pour les caches partages uniquement
-
-```
-Cache-Control: public, max-age=60, s-maxage=3600
+```http
+Cache-Control: public, max-age=86400    # image, CSS, JS → partageable
+Cache-Control: private, no-cache         # profil, dashboard → navigateur seulement
 ```
 
-Signifie :
-- Le **navigateur** cache pendant 60 secondes (max-age)
-- Le **CDN/proxy** cache pendant 3600 secondes (s-maxage)
+- `public` : la **même** réponse peut être servie à tous → idéal images, CSS, JS, pages publiques. `public` débloque aussi le cache de réponses qui, par défaut, ne seraient pas caches partagées (réponses à une requête avec en-tête `Authorization`).
+- `private` : réponse propre à un utilisateur → le CDN a **interdiction** de la stocker. Le navigateur, lui, peut.
 
-```
-NAVIGATEUR                CDN                    SERVEUR
-    |                      |                        |
-    | GET /page.html       |                        |
-    | -------------------> |                        |
-    |                      | Cache MISS             |
-    |                      | GET /page.html         |
-    |                      | ---------------------->|
-    |                      |                        |
-    |                      | <-- 200 OK             |
-    |                      | Cache-Control:         |
-    |                      | max-age=60,            |
-    |                      | s-maxage=3600          |
-    |                      |                        |
-    | <-- 200 OK           | Stocke pour 3600s     |
-    | Cache pour 60s       |                        |
-    |                      |                        |
-    |                      |                        |
-    | (apres 60s, le navigateur revalide)            |
-    | GET /page.html       |                        |
-    | -------------------> |                        |
-    |                      | Cache HIT (s-maxage    |
-    |                      | pas encore expire)     |
-    | <-- 200 OK (du CDN)  |                        |
-    |                      | (pas de requete au     |
-    |                      |  serveur d'origine !)  |
-```
+Sans `private`, une page contenant nom/email/solde peut être capturée par un CDN et resservie à un autre utilisateur. `private` empêche cette fuite ; `no-store` va plus loin en interdisant même le navigateur.
 
-**Pourquoi ?** Tu veux que les utilisateurs voient des donnees recentes (max-age court) mais tu ne veux pas que le CDN bombarder ton serveur (s-maxage long).
+### 2.7 immutable + hash dans le nom de fichier
 
-### 3.3 no-cache vs no-store — LA confusion la plus courante
+Le pattern le plus important pour la performance web.
 
-C'est **LE** piege numéro 1 de Cache-Control. Les noms sont trompeurs.
-
-```
-+------------------------------------------------------------------+
-|                                                                  |
-|  no-cache =/= "ne pas cacher" !!!                                |
-|                                                                  |
-|  no-cache = "Tu PEUX stocker, mais tu DOIS REVALIDER             |
-|              aupres du serveur AVANT chaque utilisation."         |
-|                                                                  |
-|  no-store = "Ne RIEN stocker. Jamais. Nulle part."               |
-|                                                                  |
-+------------------------------------------------------------------+
-```
-
-**Analogie** :
-- `no-cache` : Tu gardes la photocopie dans ton tiroir, mais avant de l'utiliser, tu appelles l'auteur pour confirmer qu'elle est encore a jour.
-- `no-store` : Tu ne fais même pas de photocopie. Chaque fois que tu en as besoin, tu vas chercher l'original.
-
-```
-no-cache : STOCKE + REVALIDE TOUJOURS
-=======================================
-
-Requete 1:
-  Client --> Serveur: GET /data
-  Serveur --> Client: 200 OK, Cache-Control: no-cache, ETag: "v1"
-  Client stocke en cache avec ETag "v1"
-
-Requete 2:
-  Client --> Serveur: GET /data, If-None-Match: "v1"
-  Serveur verifie... "v1" est toujours valide !
-  Serveur --> Client: 304 Not Modified  (petite reponse, ~200 octets)
-  Client utilise sa copie locale
-
-Requete 3:
-  Client --> Serveur: GET /data, If-None-Match: "v1"
-  Serveur verifie... la donnee a change ! C'est maintenant "v2".
-  Serveur --> Client: 200 OK, ETag: "v2"  (nouvelle donnee complete)
-  Client met a jour son cache
-
-
-no-store : RIEN N'EST STOCKE
-==============================
-
-Requete 1:
-  Client --> Serveur: GET /data
-  Serveur --> Client: 200 OK, Cache-Control: no-store
-  Client affiche les donnees mais NE STOCKE RIEN
-
-Requete 2:
-  Client --> Serveur: GET /data  (PAS de If-None-Match, rien en cache)
-  Serveur --> Client: 200 OK  (reponse complete CHAQUE FOIS)
-
-Requete 3:
-  Client --> Serveur: GET /data  (toujours la reponse complete)
-  Serveur --> Client: 200 OK
-```
-
-```typescript
-// Comparaison no-cache vs no-store en Node.js
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-import crypto from 'node:crypto';
-
-let data: { value: string; version: number } = { value: 'initial', version: 1 };
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  const etag: string = `"v${data.version}"`;
-
-  if (req.url === '/no-cache') {
-    // --- no-cache : stocke mais revalide toujours ---
-    const clientETag: string | undefined = req.headers['if-none-match'];
-    if (clientETag === etag) {
-      console.log('/no-cache : 304 (revalidation reussie, pas de body)');
-      res.writeHead(304, { 'ETag': etag, 'Cache-Control': 'no-cache' });
-      return res.end();
-    }
-    console.log('/no-cache : 200 (envoi du body complet)');
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache',       // STOCKE mais REVALIDE
-      'ETag': etag,
-    });
-    res.end(JSON.stringify(data));
-  }
-  else if (req.url === '/no-store') {
-    // --- no-store : rien n'est stocke ---
-    console.log('/no-store : 200 (envoi TOUJOURS le body complet)');
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-store',        // RIEN n'est stocke
-      // Pas de ETag : inutile car le client ne stocke rien
-    });
-    res.end(JSON.stringify(data));
-  }
-  else if (req.url === '/update') {
-    // --- Met a jour les donnees (pour tester) ---
-    data.version++;
-    data.value = `updated-${data.version}`;
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end(`Donnees mises a jour : version ${data.version}`);
-  }
-  else {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Essaie /no-cache, /no-store ou /update');
-  }
-});
-
-server.listen(3000, () => {
-  console.log('http://localhost:3000');
-  console.log('Compare le comportement de /no-cache et /no-store');
-});
-```
-
-### 3.4 public vs private
-
-```
-Cache-Control: public       # Tout le monde peut cacher (CDN, proxy, navigateur)
-Cache-Control: private      # SEUL le navigateur peut cacher
-```
-
-```
-PUBLIC :
-========
-          Navigateur         CDN/Proxy          Serveur
-              |                  |                  |
-  Cache OUI  [X]    Cache OUI  [X]                 |
-              |                  |                  |
-
-La meme reponse peut etre partagee entre TOUS les utilisateurs.
-Ideal pour : images, CSS, JS, pages publiques.
-
-
-PRIVATE :
-=========
-          Navigateur         CDN/Proxy          Serveur
-              |                  |                  |
-  Cache OUI  [X]    Cache NON  [ ]                 |
-              |                  |                  |
-
-La reponse est specifique a UN utilisateur.
-Ideal pour : tableaux de bord, profils, paniers d'achat.
-```
-
-**Pourquoi c'est important ?** Si ta page contient des infos personnelles (nom, email, solde bancaire) et que tu mets `public`, un CDN pourrait la cacher et la servir à un AUTRE utilisateur. `private` empeche ça.
-
-### 3.5 immutable — "Ça ne changera JAMAIS"
-
-```
+```http
+GET /assets/app.a1b2c3d4.js
 Cache-Control: public, max-age=31536000, immutable
 ```
 
-Signifie : "Ce fichier ne sera JAMAIS modifie. Même si l'utilisateur recharge la page, n'envoie PAS de requête de revalidation."
+`immutable` dit au navigateur : « ce corps ne changera pas tant qu'il est frais, ne me redemande rien, même sur F5 ». Sans lui, un rechargement déclenche une revalidation conditionnelle inutile (un `304` qui coûte quand même 1 aller-retour).
+
+Ça n'est **valide que** si l'URL contient un hash du contenu :
 
 ```
-SANS immutable :
-=================
-L'utilisateur appuie sur F5 (rechargement)
-Le navigateur envoie une requete conditionnelle meme si max-age n'a pas expire :
-  GET /app.abc123.js
-  If-None-Match: "v1"
-  --> Le serveur repond 304 Not Modified
-  --> Requete inutile ! (mais elle a quand meme coute 1 RTT)
-
-AVEC immutable :
-=================
-L'utilisateur appuie sur F5
-Le navigateur NE FAIT PAS de requete. Le fichier est immutable.
-  --> 0 requete reseau. Instantane.
+app.a1b2c3d4.js  → si le code change, le build produit app.9f8e7d6c.js
+                    l'URL change → le HTML pointe vers la nouvelle URL
+                    l'ancienne URL n'est plus jamais demandée → son cache meurt seul
 ```
 
-**Quand utiliser immutable ?** Uniquement pour les fichiers dont le nom contient un hash de contenu :
+Le hash rend le cache-busting **automatique** : plus besoin de « vider le cache ».
+
+### 2.8 HTML no-cache + assets immutables — la stratégie gagnante
+
+De 2.7 découle la stratégie standard de tout front moderne (Vite, Next, Nuxt) :
 
 ```
-/assets/app.a1b2c3d4.js     <-- Le hash change si le contenu change
-/assets/style.x9y8z7w6.css  <-- Meme chose
-/images/logo.v2.png          <-- Version dans le nom
+index.html            → Cache-Control: no-cache
+                        (toujours revalidé → l'utilisateur reçoit vite
+                         le HTML qui pointe vers les DERNIERS hashes)
 
-Ces fichiers sont des candidats PARFAITS pour immutable car :
-- Si le contenu change, l'URL change (nouveau hash)
-- Donc l'ancienne URL ne sera jamais re-demandee
-- Le cache de l'ancienne URL expirera naturellement
+/assets/*.[hash].js   → Cache-Control: public, max-age=31536000, immutable
+/assets/*.[hash].css  → (jamais revalidé, servis instantanément)
 ```
 
-### 3.6 must-revalidate et proxy-revalidate
+Le HTML est petit et change à chaque déploiement (nouveaux hashes) → `no-cache` : coût d'un `304`, mais toujours à jour. Les assets sont lourds et immuables (leur nom change avec leur contenu) → `immutable` : coût zéro. On combine ainsi **fraîcheur** (le HTML pilote la version) et **vitesse** (les assets ne repartent jamais). C'est exactement ce qui aurait évité les trois incidents du §1.
 
-```
-Cache-Control: max-age=3600, must-revalidate
-```
+### 2.9 `Expires` et `Pragma` — les vestiges HTTP/1.0
 
-Signifie : "Frais pendant 1 heure. Après ça, tu DOIS revalider. Si tu ne peux pas joindre le serveur, renvoie une erreur 504, mais ne sers PAS la copie perimee."
+Avant `Cache-Control` (HTTP/1.1), on pilotait le cache avec deux en-têtes désormais **legacy** :
 
-```
-SANS must-revalidate :
-=======================
-La reponse a expire (stale).
-Le serveur est injoignable.
-Le cache PEUT servir la copie stale.
-Utilisateur recoit : vieilles donnees (mais quelque chose)
-
-AVEC must-revalidate :
-=======================
-La reponse a expire (stale).
-Le serveur est injoignable.
-Le cache REFUSE de servir la copie stale.
-Utilisateur recoit : Erreur 504 Gateway Timeout
+```http
+Expires: Wed, 03 Jul 2026 12:00:00 GMT   # date absolue de péremption
+Pragma: no-cache                          # ancêtre de Cache-Control: no-cache
 ```
 
-**Pourquoi ?** Pour les donnees sensibles ou reglementaires (donnees bancaires, medicales), il vaut mieux afficher une erreur que des donnees potentiellement obsoletes.
+- `Expires` est une **date absolue** (sensible à l'horloge du client) et **perd toujours** face à `max-age`/`s-maxage` si les deux sont présents.
+- `Pragma: no-cache` est une directive de **requête** HTTP/1.0 ; en HTTP/1.1 elle est superflue.
 
-`proxy-revalidate` est identique mais ne s'applique qu'aux caches partages (CDN, proxies), pas au navigateur.
+**Règle :** en HTTP/1.1, pilote le cache avec `Cache-Control` seul. N'ajoute `Expires`/`Pragma` que pour un compat HTTP/1.0 explicitement demandée — jamais « par sécurité ».
 
-### 3.7 stale-while-revalidate et stale-if-error
+### 2.10 Directives de REQUÊTE (client → cache/serveur)
 
-```
-Cache-Control: max-age=60, stale-while-revalidate=30, stale-if-error=86400
-```
+Le client peut aussi imposer des directives, surtout au rechargement.
 
-**stale-while-revalidate** : "Après expiration, sers la copie stale immediatement ET revalide en arriere-plan."
+| Directive requête | Sens |
+|---|---|
+| `no-cache` | « Ne me sers pas du cache sans revalider auprès de l'origine » (émis par un hard refresh) |
+| `no-store` | « Ne stocke pas cette requête/réponse » |
+| `max-age=N` | « Je n'accepte pas une réponse plus vieille que N s » (`max-age=0` → force la revalidation) |
+| `max-stale=N` | « J'accepte une réponse stale, jusqu'à N s au-delà de sa péremption » |
+| `min-fresh=N` | « Je veux une réponse encore fraîche au moins N s » |
+| `only-if-cached` | « Réponds uniquement si tu as une copie, sinon 504 » (mode hors-ligne) |
 
-```
-SANS stale-while-revalidate :
-==============================
-t=0s    : Reponse stockee, max-age=60
-t=61s   : Cache stale. Client attend la revalidation...
-           [Client] --> [Serveur] : If-None-Match...
-           [Client] <-- [Serveur] : 304 (apres 100ms)
-           Client recoit la reponse apres 100ms d'attente.
-
-AVEC stale-while-revalidate=30 :
-==================================
-t=0s    : Reponse stockee, max-age=60
-t=61s   : Cache stale MAIS dans la fenetre stale-while-revalidate (61 < 60+30)
-           Client recoit IMMEDIATEMENT la copie stale.
-           EN MEME TEMPS, le cache revalide en arriere-plan.
-t=61.1s : Le cache a recu la nouvelle version du serveur.
-t=62s   : Le prochain client recoit la version fraiche.
-t=91s   : Au-dela de 60+30=90s, meme stale-while-revalidate refuse.
-           Il faut attendre la revalidation.
-```
-
-**stale-if-error** : "Si le serveur est en panne, sers la copie stale pendant X secondes."
-
-```
-Cache-Control: max-age=60, stale-if-error=86400
-
-t=0s     : Reponse stockee, max-age=60
-t=120s   : Cache stale. Le cache essaie de revalider...
-           Le serveur repond 500 Internal Server Error !
-           stale-if-error=86400 : on peut servir la copie stale
-           pendant 24h en cas d'erreur.
-           --> L'utilisateur recoit la derniere version connue.
-           --> BEAUCOUP mieux qu'une page d'erreur.
-```
+Un `Ctrl+Shift+R` (hard refresh) envoie `Cache-Control: no-cache` en **requête** : c'est le navigateur, pas le serveur, qui parle.
 
 ---
 
-## 4. Combinaisons courantes
+## 3. Worked examples
 
-### 4.1 Arbre de decision
+### Exemple 1 — Un serveur Express qui applique la bonne directive par type de ressource
 
-```
-Quel Cache-Control utiliser ?
-==============================
-
-La ressource contient des donnees personnelles ?
-  |
-  +-- OUI --> private
-  |            |
-  |            +-- Donnees sensibles (bancaire, medical) ?
-  |                 |
-  |                 +-- OUI --> private, no-store
-  |                 |
-  |                 +-- NON --> private, max-age=0, must-revalidate
-  |
-  +-- NON --> public (ou pas de directive, defaut)
-               |
-               +-- Le contenu change-t-il ?
-                    |
-                    +-- JAMAIS (fichier avec hash) --> public, max-age=31536000, immutable
-                    |
-                    +-- RAREMENT (quelques heures/jours) --> public, max-age=3600
-                    |
-                    +-- SOUVENT (toutes les minutes) --> public, max-age=60, stale-while-revalidate=30
-                    |
-                    +-- EN TEMPS REEL --> public, no-cache (ou max-age=0, must-revalidate)
-```
-
-### 4.2 Recettes pour chaque type de ressource
+On corrige le cas concret : chaque route reçoit son `Cache-Control`. On utilise Express (le vrai outil du lab).
 
 ```typescript
-// server-cache-strategies.ts
-// Serveur demonstrant les strategies de cache courantes
+// server.ts — stratégie Cache-Control par type de ressource
+import express from 'express';
 
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-import crypto from 'node:crypto';
+const app = express();
 
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  const url: string = req.url ?? '/';
-
-  // === 1. ASSETS STATIQUES AVEC HASH ===
-  // Fichiers JS/CSS avec un hash dans le nom
-  // Strategie : cacher "pour toujours"
-  if (url.match(/\.(js|css)\?v=[a-f0-9]+/)) {
-    res.writeHead(200, {
-      'Content-Type': url.includes('.js') ? 'application/javascript' : 'text/css',
-      'Cache-Control': 'public, max-age=31536000, immutable',
-      //                 ^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^
-      //                 Tout le monde  1 an         Ne jamais revalider
-    });
-    return res.end('/* contenu du fichier */');
-  }
-
-  // === 2. PAGE HTML DYNAMIQUE ===
-  // Change souvent, mais on peut tolerer 1 minute de retard
-  if (url === '/' || url === '/index.html') {
-    const html: string = `<html><body><h1>Page dynamique</h1><p>${new Date().toISOString()}</p></body></html>`;
-    const etag: string = `"${crypto.createHash('md5').update(html).digest('hex')}"`;
-
-    // Revalidation conditionnelle
-    if (req.headers['if-none-match'] === etag) {
-      res.writeHead(304, {
-        'ETag': etag,
-        'Cache-Control': 'public, max-age=60, must-revalidate',
-      });
-      return res.end();
-    }
-
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'public, max-age=60, must-revalidate',
-      //                 ^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^^
-      //                 CDN OK  1 minute    Apres 1 min, DOIT revalider
-      'ETag': etag,
-    });
-    return res.end(html);
-  }
-
-  // === 3. API PUBLIQUE ===
-  // Donnees qui changent, mais on peut servir du stale
-  if (url === '/api/articles') {
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'public, max-age=30, stale-while-revalidate=60, stale-if-error=86400',
-      //                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
-      //                                    Sers stale pendant 60s      Sers stale si erreur
-      //                                    en revalidant en fond       pendant 24h
-    });
-    return res.end(JSON.stringify([{ id: 1, title: 'Article' }]));
-  }
-
-  // === 4. API PRIVEE (donnees utilisateur) ===
-  // Specifique a l'utilisateur, jamais cache sur CDN
-  if (url === '/api/profile') {
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'private, max-age=0, must-revalidate',
-      //                 ^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^^^^^^^
-      //                 Navigateur   Toujours    Obliger la
-      //                 seulement    stale       revalidation
-    });
-    return res.end(JSON.stringify({ name: 'Alice', email: 'a@test.com' }));
-  }
-
-  // === 5. DONNEES SENSIBLES ===
-  // Ne JAMAIS cacher (donnees bancaires, mots de passe)
-  if (url === '/api/bank/balance') {
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-store',
-      //                 ^^^^^^^^
-      //                 RIEN n'est stocke. Jamais. Nulle part.
-      'Pragma': 'no-cache',           // Compatibilite HTTP/1.0
-    });
-    return res.end(JSON.stringify({ balance: 1234.56 }));
-  }
-
-  // === 6. IMAGE PUBLIQUE (change rarement) ===
-  if (url.match(/\.(png|jpg|webp)$/)) {
-    res.writeHead(200, {
-      'Content-Type': 'image/png',
-      'Cache-Control': 'public, max-age=86400',
-      //                 ^^^^^^  ^^^^^^^^^^^^^
-      //                 CDN OK  1 jour
-    });
-    return res.end('(donnees image)');
-  }
-
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Serveur de demonstration Cache-Control');
+// 1) ASSET À HASH → immuable, caché 1 an, jamais revalidé.
+//    Le nom (app.a1b2c3d4.js) change si le contenu change → aucun risque.
+app.get(/\/assets\/.+\.[a-f0-9]{8}\.(js|css)$/, (req, res) => {
+  res.set('Content-Type', req.path.endsWith('.js') ? 'text/javascript' : 'text/css');
+  res.set('Cache-Control', 'public, max-age=31536000, immutable');
+  res.send('/* contenu du bundle */');
 });
 
-server.listen(3000, () => console.log('http://localhost:3000'));
+// 2) HTML → no-cache : stocké MAIS revalidé à chaque fois.
+//    L'utilisateur reçoit toujours le HTML pointant vers les derniers hashes.
+//    (Le mécanisme ETag/304 qui rend cette revalidation légère = module 05.)
+app.get(['/', '/index.html'], (_req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send('<!doctype html><html><body>TribuZen</body></html>');
+});
+
+// 3) ANNUAIRE PUBLIC → cache partagé long, navigateur court.
+//    s-maxage=300 pour le CDN, max-age=30 pour le navigateur.
+app.get('/api/families', (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=30, s-maxage=300');
+  res.json([{ id: 1, name: 'Les Dupont' }]);
+});
+
+// 4) DONNÉE PERSONNELLE → private, no-store : jamais sur un CDN,
+//    et rien écrit sur le disque du navigateur.
+app.get('/api/profile', (_req, res) => {
+  res.set('Cache-Control', 'private, no-store');
+  res.json({ name: 'Alice', email: 'alice@tribuzen.app' });
+});
+
+app.listen(3000, () => console.log('http://localhost:3000'));
 ```
 
-### 4.3 Tableau des combinaisons courantes
+**Pourquoi c'est correct :**
+- L'asset a un hash → `immutable` sans risque : un nouveau build = une nouvelle URL.
+- Le HTML `no-cache` reste toujours à jour et pointe vers les bons hashes → l'incident « page blanche » disparaît.
+- L'annuaire sépare `s-maxage` (CDN, 5 min) de `max-age` (navigateur, 30 s) : le CDN absorbe la charge, l'utilisateur voit du frais.
+- Le profil `private, no-store` ne peut plus fuiter via le CDN ni rester sur un disque partagé → l'incident « fuite Bob » disparaît.
 
-| Scenario                          | Cache-Control                                                     |
-|-----------------------------------|-------------------------------------------------------------------|
-| Asset avec hash (JS, CSS)         | `public, max-age=31536000, immutable`                             |
-| Police de caracteres              | `public, max-age=31536000, immutable`                             |
-| Image publique                    | `public, max-age=86400`                                           |
-| Page HTML publique                | `public, max-age=60, must-revalidate`                             |
-| API publique                      | `public, max-age=30, stale-while-revalidate=60`                   |
-| API privee (profil)               | `private, max-age=0, must-revalidate`                             |
-| Dashboard utilisateur             | `private, no-cache`                                               |
-| Donnees sensibles                 | `no-store`                                                        |
-| Page derriere CDN + navigateur    | `public, max-age=60, s-maxage=3600`                               |
-| Reponse API temps-réel            | `no-cache` (où `max-age=0, must-revalidate`)                      |
+### Exemple 2 — Décoder une réponse observée en DevTools
+
+Tu vois cette réponse sur `/api/families` dans l'onglet Network :
+
+```http
+HTTP/1.1 200 OK
+Cache-Control: public, max-age=30, s-maxage=300
+Age: 120
+Date: Wed, 03 Jul 2026 10:00:00 GMT
+```
+
+Lecture pas à pas :
+
+1. `Age: 120` → la réponse est en cache partagé depuis 120 s.
+2. Pour le **CDN**, la fraîcheur est pilotée par `s-maxage=300` (prioritaire sur `max-age`). `120 < 300` → **encore fraîche** côté CDN, il sert sans toucher l'origine.
+3. Pour le **navigateur**, c'est `max-age=30` qui s'applique. Mais il reçoit une réponse déjà âgée de 120 s : `age (120) >= max-age (30)` → **stale** pour lui, il devra revalider avant de resservir.
+
+Conclusion : le CDN sert vite (il protège l'origine 5 min), mais chaque navigateur revalide après 30 s. On sépare volontairement les deux durées — c'est tout l'intérêt de `s-maxage`.
 
 ---
 
-## 5. Diagrammes de flux
+## 4. Pièges & misconceptions
 
-### 5.1 public, max-age=3600
+### PIÈGE #1 — Croire que `no-cache` empêche le stockage
 
-```
-t=0s : Le serveur envoie la reponse
-       Cache-Control: public, max-age=3600
-
-NAVIGATEUR                CDN                    SERVEUR
-  [Cache: frais]          [Cache: frais]
-  Expire dans 3600s       Expire dans 3600s
-
-t=100s : Utilisateur 1 demande la page
-  Navigateur: "Mon cache est frais (100 < 3600)" --> Sert du cache
-  CDN: pas solicite
-  Serveur: pas solicite
-  --> 0 requete reseau !
-
-t=100s : Utilisateur 2 (nouveau visiteur) demande la page
-  Son navigateur n'a pas de cache
-  Navigateur --> CDN: "Mon cache est frais" --> Sert du CDN
-  Serveur: pas solicite
-  --> 1 requete, mais geree par le CDN
-
-t=4000s : Cache expire partout
-  Navigateur --> CDN --> Serveur
-  --> Revalidation ou nouvelle reponse
+```http
+❌ Cache-Control: no-cache      # "comme ça rien n'est gardé"
 ```
 
-### 5.2 private, no-cache
+Faux. `no-cache` **stocke** la réponse (y compris sur le disque du navigateur) et se contente de la revalider avant usage. Pour une donnée sensible, elle reste donc écrite en clair sur la machine.
 
-```
-t=0s : Le serveur envoie la reponse
-       Cache-Control: private, no-cache
-       ETag: "user-42-v1"
-
-NAVIGATEUR                CDN                    SERVEUR
-  [Cache: stocke]         [INTERDIT]
-  Doit revalider          (private = pas de
-  a chaque fois           cache partage)
-
-t=10s : L'utilisateur revient sur la page
-  Navigateur: "J'ai une copie mais no-cache = je DOIS revalider"
-  Navigateur --> Serveur: If-None-Match: "user-42-v1"
-  Serveur: "v1 est encore bon"
-  Serveur --> Navigateur: 304 Not Modified
-  --> 1 requete, mais petite reponse (~200 octets au lieu de ~50 Ko)
-
-t=20s : Les donnees ont change sur le serveur
-  Navigateur --> Serveur: If-None-Match: "user-42-v1"
-  Serveur: "v1 est obsolete, voici v2"
-  Serveur --> Navigateur: 200 OK, ETag: "user-42-v2", (nouveau contenu)
-  --> 1 requete avec le contenu complet
+```http
+✅ Cache-Control: no-store      # rien n'est jamais écrit
 ```
 
-### 5.3 no-store
+**Règle :** `no-cache` = *revalide* ; `no-store` = *jamais stocké*. Sensible → `no-store`.
 
+### PIÈGE #2 — `immutable` sur un fichier sans hash
+
+```http
+❌ /style.css → Cache-Control: public, max-age=31536000, immutable
 ```
-t=0s : Le serveur envoie la reponse
-       Cache-Control: no-store
 
-NAVIGATEUR                CDN                    SERVEUR
-  [RIEN]                  [RIEN]
+Tu modifies `style.css`, l'URL ne change pas → les utilisateurs gardent l'ancienne version **un an**, sans moyen de forcer la mise à jour.
 
-t=10s : L'utilisateur revient sur la page
-  Navigateur: "Je n'ai rien en cache"
-  Navigateur --> Serveur: GET /api/bank/balance (requete complete)
-  Serveur --> Navigateur: 200 OK (reponse complete)
-  --> Requete complete a chaque fois. Pas d'optimisation possible.
+```http
+✅ /style.7f3a9c1e.css → Cache-Control: public, max-age=31536000, immutable
 ```
+
+**Règle :** `immutable` + `max-age` long **uniquement** si un hash de contenu est dans le nom. Sinon, `max-age` court (ex. `max-age=3600`).
+
+### PIÈGE #3 — `public` sur une donnée personnelle
+
+```http
+❌ /api/profile → Cache-Control: public, max-age=600
+```
+
+Un CDN met la réponse d'Alice en cache partagé et la sert à Bob. Fuite de données.
+
+```http
+✅ /api/profile → Cache-Control: private, no-store
+```
+
+**Règle :** dès qu'une réponse dépend de l'identité de l'utilisateur, jamais `public`. `private` au minimum, `no-store` si sensible.
+
+### PIÈGE #4 — `private` avec `s-maxage` (contradiction)
+
+```http
+❌ Cache-Control: private, s-maxage=3600
+```
+
+`private` interdit le cache partagé ; `s-maxage` ne parle **qu'au** cache partagé. La directive est ignorée — signal d'incompréhension.
+
+```http
+✅ Cache-Control: private, max-age=3600
+✅ Cache-Control: public, max-age=60, s-maxage=3600
+```
+
+**Règle :** `s-maxage` et `proxy-revalidate` n'ont de sens qu'avec `public`.
+
+### PIÈGE #5 — HTML mis en cache long
+
+```http
+❌ index.html → Cache-Control: public, max-age=31536000
+```
+
+Le HTML pointe vers `app.[hash].js`. Figé un an, il continue de réclamer un bundle supprimé → 404, page blanche après déploiement.
+
+```http
+✅ index.html → Cache-Control: no-cache
+```
+
+**Règle :** le HTML est le point d'entrée versionné → `no-cache` (revalidé). Ce sont les **assets à hash** qu'on cache pour toujours, pas le HTML.
+
+### PIÈGE #6 — La ceinture ET les bretelles
+
+```http
+❌ Cache-Control: no-store, no-cache, max-age=0, must-revalidate, private
+   Expires: 0
+   Pragma: no-cache
+```
+
+`no-store` rend tout le reste inutile. `Expires`/`Pragma` sont du legacy HTTP/1.0.
+
+```http
+✅ Cache-Control: no-store
+```
+
+**Règle :** `no-store` seul suffit. En HTTP/1.1, oublie `Expires` et `Pragma`.
 
 ---
 
-## 6. Anti-patterns et erreurs courantes
+## 5. Ancrage TribuZen
 
-### 6.1 Anti-pattern #1 : Confondre no-cache et no-store
+La stratégie `Cache-Control` de TribuZen suit exactement les patterns de ce module, ressource par ressource :
 
+| Ressource | Cache-Control | Raison |
+|---|---|---|
+| `/assets/*.[hash].js`, `.css` | `public, max-age=31536000, immutable` | Bundle Vite à hash → immuable, jamais revalidé |
+| `index.html` | `no-cache` | Point d'entrée versionné → toujours à jour, pointe vers les bons hashes |
+| `GET /api/families` (annuaire public) | `public, max-age=30, s-maxage=300` | Liste publique → CDN 5 min, navigateur frais |
+| `GET /api/me`, `/api/profile` | `private, no-store` | Données personnelles → jamais sur un CDN, rien sur le disque |
+| `GET /api/invoices/:id.pdf` | `private, no-store` | Document confidentiel par utilisateur |
+| Images publiques `/img/*.png` (sans hash) | `public, max-age=86400` | Change rarement, mais pas de hash → 1 jour, pas 1 an |
+
+Points d'implémentation dans `smaurier/tribuzen` :
+- **Front (Vite + nginx/CDN)** : `nginx.conf` route les `/assets/*` en `immutable` et `index.html` en `no-cache` — corrige les trois incidents du cas concret.
+- **API (NestJS)** : un intercepteur pose `private, no-store` par défaut sur toute route authentifiée ; les routes publiques opt-in avec `public, s-maxage=...`.
+- **CDN** : le `s-maxage` protège l'origine sur les listes publiques ; le `private` garantit qu'aucune réponse authentifiée n'entre dans le cache partagé.
+
+Fichiers cibles :
 ```
-MAUVAIS :
-  Cache-Control: no-cache
-  "Je ne veux pas que ce soit cache !"
-  --> ERREUR : no-cache stocke ET revalide. La donnee est en cache.
-
-BON :
-  Cache-Control: no-store
-  "Je ne veux vraiment pas que ce soit stocke."
-  --> CORRECT : rien n'est stocke.
-```
-
-### 6.2 Anti-pattern #2 : max-age sur des assets sans hash
-
-```
-MAUVAIS :
-  /style.css --> Cache-Control: max-age=31536000
-
-  Probleme : tu modifies style.css mais l'URL ne change pas.
-  Les utilisateurs verront l'ancienne version pendant 1 AN.
-  Tu ne peux pas "forcer" l'expiration du cache.
-
-BON :
-  /style.a1b2c3.css --> Cache-Control: max-age=31536000, immutable
-
-  Si tu modifies le CSS, le hash change et l'URL aussi :
-  /style.d4e5f6.css --> Nouvelle URL = pas de cache hit = nouvelle version
-```
-
-### 6.3 Anti-pattern #3 : Oublier Vary avec public
-
-```
-MAUVAIS :
-  Cache-Control: public, max-age=3600
-  (sans Vary: Accept-Encoding)
-
-  Le CDN cache la version gzip.
-  Un vieux client sans gzip recoit... du gzip qu'il ne comprend pas.
-
-BON :
-  Cache-Control: public, max-age=3600
-  Vary: Accept-Encoding
-```
-
-### 6.4 Anti-pattern #4 : private + s-maxage
-
-```
-MAUVAIS :
-  Cache-Control: private, s-maxage=3600
-
-  Contradiction ! private dit "pas de cache partage"
-  mais s-maxage est POUR les caches partages.
-  s-maxage sera ignore.
-
-BON :
-  Cache-Control: private, max-age=3600
-  OU
-  Cache-Control: public, s-maxage=3600, max-age=60
-```
-
-### 6.5 Anti-pattern #5 : Le "ceinture ET bretelles" inutile
-
-```
-EXCESSIF :
-  Cache-Control: no-store, no-cache, max-age=0, must-revalidate, private
-  Expires: 0
-  Pragma: no-cache
-
-  no-store rend tout le reste inutile.
-  C'est du code defensif qui revele une incomprehension.
-
-SUFFISANT :
-  Cache-Control: no-store
-
-  C'est tout. no-store signifie "ne stocke rien", point.
-  (Ajouter Pragma: no-cache pour la compatibilite HTTP/1.0 est acceptable)
+tribuzen/
+  infra/nginx.conf                              # règles assets immutables + HTML no-cache
+  api/src/common/cache-control.interceptor.ts   # private, no-store par défaut
+  api/src/families/families.controller.ts       # opt-in public, s-maxage sur l'annuaire
 ```
 
 ---
 
-## 7. Le header Expires (legacy)
+## 6. Points clés
 
-### 7.1 Pourquoi Expires est desuet
+1. Deux caches : **privé** (navigateur) et **partagé** (CDN/proxy) — `s-maxage` et `proxy-revalidate` ne concernent que le partagé ; `private` interdit le partagé.
+2. Fraîcheur : ordre `s-maxage` > `max-age` > `Expires` > heuristique (partagé) ; `max-age` bat toujours `Expires` (legacy).
+3. `no-cache` = **stocké mais revalidé** à chaque usage ; `no-store` = **jamais stocké** — ne jamais confondre.
+4. `public` = partageable par un CDN ; `private` = navigateur seulement ; donnée personnelle → jamais `public`.
+5. `immutable` + `max-age` long **uniquement** si le nom de fichier contient un hash de contenu (cache-busting automatique).
+6. Stratégie front standard : `index.html` en `no-cache`, assets à hash en `public, max-age=31536000, immutable`.
+7. `Age` révèle depuis quand une réponse est en cache partagé ; `Expires`/`Pragma` sont du legacy HTTP/1.0 à éviter.
+
+---
+
+## 7. Seeds Anki
 
 ```
-# Expires utilise une date absolue :
-Expires: Thu, 14 Mar 2026 12:00:00 GMT
-
-# Cache-Control utilise une duree relative :
-Cache-Control: max-age=604800
-
-Probleme d'Expires :
-- Si l'horloge du client est decalee, le calcul est faux
-- Le format de date est strict et facile a mal ecrire
-- max-age est PRIORITAIRE sur Expires (si les deux sont presents)
+Quelle est la différence entre no-cache et no-store ?|no-cache STOCKE la réponse mais la REVALIDE auprès de l'origine avant chaque réutilisation (souvent un 304 léger). no-store ne stocke RIEN, nulle part, jamais — chaque requête repart en 200 complet. Pour une donnée sensible, il faut no-store (no-cache laisse la donnée sur le disque).
+Quand peut-on utiliser immutable + max-age=31536000 sur un asset ?|Uniquement si le nom du fichier contient un hash de son contenu (app.a1b2c3d4.js). Si le contenu change, le build produit une nouvelle URL, donc l'ancienne n'est jamais redemandée. Sans hash, on figerait l'ancienne version un an sans pouvoir la corriger.
+Quelle est la stratégie Cache-Control standard d'un front moderne (Vite, Next) ?|index.html en no-cache (léger à revalider, pointe toujours vers les derniers hashes) + assets à hash en public, max-age=31536000, immutable (jamais revalidés). On combine fraîcheur du HTML et vitesse des assets.
+Quelle est la différence entre public et private ?|public : la réponse peut être stockée par un cache partagé (CDN, proxy) et servie à tous. private : cache privé (navigateur) seulement, interdit au CDN. Une donnée dépendant de l'utilisateur ne doit jamais être public, sinon un CDN peut la resservir à un autre utilisateur.
+Quel est l'ordre de priorité pour calculer la fraîcheur côté cache partagé ?|s-maxage > max-age > Expires > heuristique. Le premier présent gagne. Cache-Control (max-age/s-maxage) est toujours prioritaire sur Expires. Côté cache privé, s-maxage est ignoré : max-age > Expires.
+À quoi sert la directive s-maxage et pourquoi la combiner avec max-age ?|s-maxage ne s'applique qu'au cache PARTAGÉ (CDN/proxy) et y écrase max-age. On met un s-maxage long (le CDN absorbe la charge) et un max-age court (l'utilisateur voit du frais). Elle n'a de sens qu'avec public — private + s-maxage est contradictoire.
+Que signifie l'en-tête de réponse Age ?|Le nombre de secondes depuis que la réponse a été générée par le serveur d'origine, ajouté par un cache partagé. Age élevé = servi depuis un CDN ; Age absent ou 0 = vient de l'origine. Fraîcheur restante ≈ max-age - Age.
+Que fait un hard refresh (Ctrl+Shift+R) côté Cache-Control ?|Le navigateur envoie Cache-Control: no-cache en directive de REQUÊTE, forçant une revalidation de toutes les ressources. C'est le client qui parle, pas le serveur.
 ```
 
-**Regle simple** : Utilise toujours `Cache-Control: max-age` à la place de `Expires`. Si tu vois encore `Expires`, c'est pour la compatibilite avec de très vieux clients HTTP/1.0.
-
 ---
 
-## Points clés
+## Pont vers le lab
 
-1. **Le cycle de vie** : Fresh (frais) -> Stale (perime) -> Revalidation (vérification).
-2. **max-age** définit la duree de fraicheur en secondes. **s-maxage** est pour les caches partages (CDN).
-3. **no-cache** = stocke mais revalide toujours. **no-store** = ne stocke rien. C'est la confusion la plus frequente.
-4. **public** = tout le monde peut cacher. **private** = navigateur seulement. Important pour les donnees utilisateur.
-5. **immutable** = jamais de revalidation. Uniquement pour les fichiers avec un hash dans le nom.
-6. **stale-while-revalidate** et **stale-if-error** ameliorent la performance et la résilience.
-7. **Expires** est obsolete. Preferer **max-age**.
-
----
-
-## Lab associe
-
--> `labs/04-strategies-cache-control.md` — Configurer Cache-Control pour différents types de ressources
-
----
-
-## Pour aller plus loin
-
-- [MDN — Cache-Control](https://developer.mozilla.org/fr/docs/Web/HTTP/Headers/Cache-Control)
-- [web.dev — HTTP Cache](https://web.dev/articles/http-cache)
-- [RFC 9111 — HTTP Caching](https://www.rfc-editor.org/rfc/rfc9111)
-- [Jake Archibald — Caching best practices](https://jakearchibald.com/2016/caching-best-practices/)
-- [Cloudflare — Cache-Control](https://developers.cloudflare.com/cache/concepts/cache-control/)
-
----
-
-## Si tu es perdu
-
-**Retiens juste quatre combinaisons :**
-
-1. **Fichier statique avec hash** (app.abc123.js) : `public, max-age=31536000, immutable` --> Cache 1 an, ne change jamais.
-2. **Page HTML dynamique** : `public, no-cache` --> Toujours revalider avant d'afficher.
-3. **Donnees privees** (profil utilisateur) : `private, no-cache` --> Seulement dans le navigateur, toujours revalider.
-4. **Donnees sensibles** (bancaire) : `no-store` --> Ne jamais stocker nulle part.
-
-Avec ces 4 recettes, tu couvres 90% des cas.
-
----
-
-## Exercice pratique — Chrome DevTools
-
-### Objectif
-
-Observer le comportement de Cache-Control dans Chrome DevTools en utilisant le serveur du lab-03. Comprendre la différence entre hard refresh et refresh normal, le role de "Disable cache", et la distinction entre memory cache et disk cache.
-
-### Etapes
-
-1. **Lancer le serveur lab-03**
-   - Ouvre un terminal et lance le serveur de demonstration :
-   ```bash
-   node labs/lab-03-cache-control-lab/solution.js
-   ```
-   - Le serveur demarre sur `http://localhost:3000`
-
-2. **Premier chargement — Observer les headers Cache-Control**
-   - Ouvre Chrome et va sur `http://localhost:3000`
-   - Ouvre DevTools (`F12`) > onglet **Network**
-   - Recharge la page (`F5`)
-   - Clique sur chaque requête et examine les **Response Headers** :
-     - Repere le header `Cache-Control` sur chaque ressource
-     - Note les différentes valeurs : `max-age=...`, `no-cache`, `no-store`, `public`, `private`, `immutable`
-   - Observe la colonne **Size** : toutes les ressources affichent une taille en octets (premier chargement, pas de cache)
-
-3. **Refresh normal (F5) — Observer le cache en action**
-   - Appuie sur `F5` pour recharger normalement
-   - Observe la colonne **Size** dans la liste des requêtes :
-     - Les ressources avec `max-age` eleve apparaissent comme `(from memory cache)` ou `(from disk cache)`
-     - Les ressources avec `no-cache` montrent un status `304 Not Modified` (si ETag present)
-     - Les ressources avec `no-store` sont toujours telechargees depuis le réseau
-   - Observe la colonne **Time** : les ressources en cache affichent `0 ms` ou quelques millisecondes
-
-4. **Hard refresh (Ctrl+Shift+R) — Contourner le cache**
-   - Appuie sur `Ctrl+Shift+R` (Windows/Linux) ou `Cmd+Shift+R` (Mac)
-   - Observe que **toutes** les ressources sont telechargees depuis le réseau
-   - Le navigateur envoie un header de requête `Cache-Control: no-cache` qui force le serveur a renvoyer le contenu complet
-   - Compare les temps de chargement : le hard refresh est plus lent que le refresh normal
-
-5. **"Disable cache" — Le mode sans cache de DevTools**
-   - Coche la case **Disable cache** en haut de l'onglet Network
-   - Recharge la page avec `F5`
-   - Observe que même les ressources avec `max-age=31536000` sont re-telechargees
-   - **Important** : "Disable cache" ne fonctionne que quand DevTools est ouvert. Decoche-la quand tu as fini de debugger.
-   - Decoche **Disable cache** pour les étapes suivantes
-
-6. **Observer memory cache vs disk cache**
-   - Ferme l'onglet de la page (mais garde DevTools ouvert dans un autre onglet)
-   - Rouvre `http://localhost:3000` dans un nouvel onglet
-   - Observe la colonne **Size** :
-     - `(from disk cache)` — la ressource etait sur le disque dur (persiste entre les onglets/sessions)
-   - Sans fermer l'onglet, recharge avec `F5` :
-     - Certaines ressources passent de `(from disk cache)` a `(from memory cache)` — elles sont maintenant en RAM, encore plus rapide
-   - Regle à retenir :
-     - **memory cache** : lie a l'onglet ouvert, ultra-rapide (~0 ms), disparait quand l'onglet est ferme
-     - **disk cache** : persiste sur le disque, rapide (~5 ms), survit à la fermeture du navigateur
-
-7. **Observer le decompte du max-age**
-   - Clique sur une ressource avec `max-age=60` (par exemple)
-   - Dans les **Response Headers**, note la valeur du header `Date` (date de la réponse originale)
-   - Recharge après quelques secondes : si le `max-age` n'est pas expire, la ressource est servie depuis le cache
-   - Attends que le `max-age` expire, puis recharge : le navigateur envoie une nouvelle requête au serveur
-   - Tu peux voir le header de requête `If-None-Match` apparaître quand le cache est expire (revalidation)
-
-### Ce que tu devrais observer
-
-```
-Premier chargement :
-  style.css      200    15.2 kB      120ms    (telechargement reseau)
-  app.js         200    45.0 kB      150ms    (telechargement reseau)
-
-Refresh normal (F5) — dans les 60 secondes :
-  style.css      200    (disk cache)  0ms     Cache HIT
-  app.js         200    (memory cache) 0ms    Cache HIT (RAM)
-
-Hard refresh (Ctrl+Shift+R) :
-  style.css      200    15.2 kB      110ms    (force le re-telechargement)
-  app.js         200    45.0 kB      140ms    (force le re-telechargement)
-
-Apres expiration du max-age :
-  style.css      304    (taille headers)  45ms  Revalidation reussie
-```
-
-### Questions de reflexion
-
-- Pourquoi les ressources avec `no-store` sont-elles toujours telechargees, même lors d'un refresh normal ?
-- Quelle est la différence pratique entre `(from memory cache)` et `(from disk cache)` pour l'utilisateur ?
-- Pourquoi "Disable cache" est-il utile pendant le développement, mais dangereux a laisser active en production-test ?
-- Après expiration du `max-age`, pourquoi le navigateur envoie-t-il un `304` plutot qu'un `200` complet ?
-
----
-
-## Defi
-
-### Le jeu des combinaisons
-
-**Objectif** : Pour chaque scenario ci-dessous, trouve la combinaison Cache-Control optimale.
-
-**Scenarios :**
-
-1. Un fichier JavaScript `vendor.8f3a2b.js` (librairies tierces, hash dans le nom)
-2. La page d'accueil `index.html` d'un site d'actualites (change toutes les 5 minutes)
-3. L'endpoint `/api/me` qui renvoie le profil de l'utilisateur connecte
-4. Un fichier PDF de facture accessible uniquement par l'utilisateur concerne
-5. L'endpoint `/api/stock-price` qui renvoie le prix d'une action en temps réel
-6. Une image de fond `/bg-pattern.png` utilisee sur toutes les pages (change rarement)
-7. L'endpoint `/api/feed` d'un réseau social, qui doit rester disponible même si le serveur tombe
-
-<details>
-<summary>Reponses</summary>
-
-1. **vendor.8f3a2b.js** : `public, max-age=31536000, immutable`
-   Le hash change si le contenu change, donc on peut cacher agressivement.
-
-2. **index.html** : `public, max-age=300, must-revalidate` ou `public, s-maxage=300, max-age=60`
-   5 minutes de fraicheur, revalidation obligatoire après.
-
-3. **/api/me** : `private, no-cache`
-   Donnees spécifiques a l'utilisateur, toujours revalider.
-
-4. **Facture PDF** : `private, no-store` ou `private, max-age=0, must-revalidate`
-   Donnees confidentielles, soit ne pas stocker, soit revalider strictement.
-
-5. **/api/stock-price** : `no-store` ou `max-age=0, must-revalidate`
-   Donnees temps-réel, toute version en cache est potentiellement trompeuse.
-
-6. **bg-pattern.png** : `public, max-age=86400` (1 jour)
-   Change rarement, mais comme il n'y a pas de hash dans le nom, on ne peut pas mettre 1 an.
-
-7. **/api/feed** : `public, max-age=60, stale-while-revalidate=30, stale-if-error=86400`
-   Frais 1 minute, peut servir stale pendant revalidation, et si le serveur tombe, servir stale pendant 24h.
-
-</details>
-
----
-
-## Navigation
-
-| Précédent | Suivant |
-|:---------:|:-------:|
-| [Module 03 — Les en-tetes HTTP](./03-en-tetes-http.md) | [Module 05 — ETag & Validation conditionnelle](./05-etag-validation-conditionnelle.md) |
-
----
-
-<!-- parcours-recommande -->
-
-::: tip Parcours recommandé
-1. **Screencast** : [screencast 04 cache control](../screencasts/screencast-04-cache-control.md)
-2. **Visualisation** : [Cache Decision Tree](../visualizations/cache-decision-tree.html)
-3. **Quiz** : [quiz 04 cache control](../quizzes/quiz-04-cache-control.html)
-:::
+> Lab associé : `11-http-caching/labs/lab-04-cache-control/README.md`. Configurer les bons `Cache-Control` pour chaque type de ressource (asset à hash, HTML, annuaire public, profil privé, données sensibles) sur un vrai serveur Express, puis observer le comportement avec `curl -I` et l'onglet Network de DevTools.

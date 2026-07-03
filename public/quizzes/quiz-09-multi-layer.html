@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quiz 09 — Cache Multi-Couches</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; padding: 2rem 1rem; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { text-align: center; margin-bottom: 0.5rem; font-size: 1.8rem; color: #ffffff; }
+    .subtitle { text-align: center; color: #8892b0; margin-bottom: 2rem; font-size: 1rem; }
+    .progress-bar-container { background: #0d1117; border-radius: 10px; height: 14px; margin-bottom: 2rem; overflow: hidden; }
+    .progress-bar { background: linear-gradient(90deg, #0d6efd, #4dabf7); height: 100%; width: 0%; border-radius: 10px; transition: width 0.4s ease; }
+    .progress-text { text-align: center; color: #8892b0; margin-bottom: 1rem; font-size: 0.9rem; }
+    .card { background: #16213e; border-radius: 12px; padding: 2rem; margin-bottom: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+    .question-label { font-size: 0.85rem; color: #4dabf7; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem; }
+    .question-text { font-size: 1.15rem; margin-bottom: 1.2rem; line-height: 1.5; color: #ffffff; }
+    pre { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; margin-bottom: 1.2rem; overflow-x: auto; font-size: 0.95rem; }
+    code { font-family: 'Consolas', 'Fira Code', 'Courier New', monospace; color: #c9d1d9; }
+    .options { list-style: none; }
+    .options li { margin-bottom: 0.5rem; }
+    .options label { display: flex; align-items: center; gap: 0.75rem; padding: 0.8rem 1rem; background: #0d1117; border: 2px solid #30363d; border-radius: 8px; cursor: pointer; transition: border-color 0.2s, background 0.2s; font-size: 1rem; }
+    .options label:hover { border-color: #4dabf7; background: #1c2a4a; }
+    .options input[type="radio"] { accent-color: #0d6efd; width: 18px; height: 18px; flex-shrink: 0; }
+    .btn { display: inline-block; padding: 0.7rem 2rem; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background 0.2s, transform 0.1s; }
+    .btn-primary { background: #0d6efd; color: #fff; }
+    .btn-primary:hover { background: #3b82f6; }
+    .btn-primary:disabled { background: #374151; cursor: not-allowed; }
+    .btn-restart { background: #238636; color: #fff; margin-top: 1rem; padding: 0.7rem 2rem; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; }
+    .btn-restart:hover { background: #2ea043; }
+    .feedback { margin-top: 1rem; padding: 1rem 1.2rem; border-radius: 8px; font-size: 0.95rem; line-height: 1.5; display: none; }
+    .feedback.correct { background: #0f5132; border: 1px solid #198754; color: #d1fae5; display: block; }
+    .feedback.wrong { background: #842029; border: 1px solid #dc3545; color: #fdd; display: block; }
+    .score-card { text-align: center; padding: 3rem 2rem; }
+    .score-card .score { font-size: 3rem; font-weight: 700; color: #4dabf7; margin-bottom: 0.5rem; }
+    .score-card .score-label { font-size: 1.2rem; color: #8892b0; margin-bottom: 1.5rem; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Quiz 09 — Cache Multi-Couches</h1>
+    <p class="subtitle">Cohérence de cache, invalidation, surrogate keys et stratégies multi-niveaux</p>
+    <div class="progress-bar-container"><div class="progress-bar" id="progressBar"></div></div>
+    <p class="progress-text" id="progressText">Question 1 / 5</p>
+    <div id="quizContainer"></div>
+    <div id="scoreContainer" class="card score-card hidden"></div>
+  </div>
+  <script>
+    const questions = [
+      {
+        label: "Concept",
+        text: "Dans une architecture cache multi-couches (navigateur → CDN → reverse proxy → application), pourquoi l'invalidation est-elle considérée comme l'un des « deux problèmes difficiles de l'informatique » ?",
+        code: null,
+        options: [
+          "Parce que les protocoles HTTP ne supportent pas l'invalidation",
+          "Parce que chaque couche a son propre TTL et mécanisme : invalider un contenu nécessite de propager le changement à travers toutes les couches, y compris les caches navigateur qu'on ne contrôle pas",
+          "Parce que l'invalidation consomme trop de bande passante",
+          "Parce que seuls les caches centralisés supportent l'invalidation"
+        ],
+        answer: 1,
+        explanation: "Phil Karlton : « Il n'y a que deux choses difficiles en informatique : l'invalidation de cache et nommer les choses. » Chaque couche (navigateur, CDN, reverse proxy, application cache) a son propre TTL et mécanisme d'invalidation. Le navigateur est particulièrement problématique car on ne peut pas le « purger » à distance. C'est pourquoi des stratégies comme le cache-busting (hash dans les URLs) existent."
+      },
+      {
+        label: "Concept",
+        text: "Qu'est-ce que le pattern « cache-aside » (ou « lazy population ») dans une architecture multi-couches ?",
+        code: null,
+        options: [
+          "Le cache est mis à jour automatiquement par le serveur de base de données",
+          "L'application vérifie d'abord le cache ; en cas de miss, elle récupère les données de la source, les stocke en cache, puis les renvoie",
+          "Le cache est toujours pré-rempli au démarrage de l'application",
+          "Les données sont stockées uniquement dans le cache, jamais dans la base de données"
+        ],
+        answer: 1,
+        explanation: "Le pattern cache-aside : (1) L'application tente de lire du cache (Redis, Memcached). (2) En cas de MISS, elle interroge la source de données (BDD). (3) Elle stocke le résultat dans le cache. (4) Elle renvoie la réponse. C'est « lazy » car le cache se remplit à la demande, pas proactivement. L'invalidation se fait soit par TTL, soit explicitement quand les données sont modifiées."
+      },
+      {
+        label: "Prédiction",
+        text: "Un administrateur met à jour un produit. Les caches sont configurés comme ci-dessous. Combien de temps maximum un utilisateur peut-il voir l'ancienne version ?",
+        code: "# Architecture de cache :\n# Navigateur : Cache-Control: max-age=60\n# CDN :        Cache-Control: s-maxage=300\n# Redis :      TTL = 600 secondes\n\n# Scénario : L'admin met à jour le produit.\n# Le code purge Redis et le CDN immédiatement.\n# Mais aucune action n'est possible sur le cache navigateur.",
+        options: [
+          "0 seconde car tous les caches sont purgés",
+          "60 secondes maximum (durée restante du cache navigateur)",
+          "300 secondes (durée du CDN)",
+          "600 secondes (durée de Redis)"
+        ],
+        answer: 1,
+        explanation: "Redis et le CDN sont purgés immédiatement. Mais le cache navigateur (max-age=60) ne peut pas être invalidé à distance. Un utilisateur qui a chargé la page juste avant la mise à jour devra attendre jusqu'à 60 secondes pour que son cache navigateur expire. C'est pourquoi on utilise des max-age courts pour le navigateur et des s-maxage plus longs pour le CDN (qu'on peut purger)."
+      },
+      {
+        label: "Code",
+        text: "Ce code Node.js implémente un cache multi-niveaux. Identifiez la faille de cohérence.",
+        code: "const redis = require('redis').createClient();\n\napp.put('/api/products/:id', async (req, res) => {\n  // 1. Mise à jour en base de données\n  await db.products.update(req.params.id, req.body);\n  \n  // 2. Invalidation du cache Redis\n  await redis.del(`product:${req.params.id}`);\n  \n  // 3. Purge CDN\n  await cdn.purge(`/api/products/${req.params.id}`);\n  \n  res.json({ success: true });\n});\n\n// Problème : que se passe-t-il si le serveur crash\n// entre l'étape 1 et l'étape 2 ?",
+        options: [
+          "Aucun problème, les transactions BDD protègent contre cela",
+          "Le cache Redis et le CDN servent des données obsolètes indéfiniment car l'invalidation n'a jamais eu lieu — il faut un mécanisme de rattrapage (TTL de sécurité ou job de nettoyage)",
+          "La base de données fait un rollback automatique",
+          "Le CDN détecte automatiquement l'incohérence"
+        ],
+        answer: 1,
+        explanation: "Si le serveur crashe après l'étape 1 (BDD mise à jour) mais avant l'étape 2 (invalidation Redis), le cache Redis sert des données obsolètes. La solution : (1) toujours avoir un TTL de sécurité sur les entrées Redis (même 1 heure) pour limiter la durée de l'incohérence ; (2) utiliser un pattern « write-through » ou un système d'événements (CDC) pour découpler la mise à jour du cache."
+      },
+      {
+        label: "Pourquoi ?",
+        text: "Pourquoi utilise-t-on souvent des TTL courts côté navigateur (max-age=0 ou 60) combinés avec des TTL longs côté CDN (s-maxage=86400) ?",
+        code: null,
+        options: [
+          "Parce que les navigateurs ne supportent pas les longs TTL",
+          "Parce que le cache CDN peut être purgé programmatiquement lors des mises à jour, tandis que le cache navigateur est hors de notre contrôle — un TTL court limite la durée d'incohérence côté client",
+          "Parce que les CDN sont plus rapides que les navigateurs pour servir du cache",
+          "Parce que les TTL longs ne fonctionnent qu'avec HTTPS"
+        ],
+        answer: 1,
+        explanation: "Le CDN est sous notre contrôle : on peut le purger instantanément via son API quand le contenu change. Le cache navigateur est hors de notre portée : une fois la réponse envoyée, on ne peut pas forcer le navigateur à revalider. Un TTL court (0-60s) limite la fenêtre d'incohérence. Le CDN absorbe la charge avec un long TTL, et on le purge quand nécessaire."
+      }
+    ];
+    let currentQuestion = 0, score = 0, answered = false;
+    function renderQuestion() {
+      answered = false;
+      const q = questions[currentQuestion];
+      document.getElementById('progressBar').style.width = ((currentQuestion / questions.length) * 100) + '%';
+      document.getElementById('progressText').textContent = `Question ${currentQuestion + 1} / ${questions.length}`;
+      let html = `<div class="card"><p class="question-label">${q.label} — Question ${currentQuestion + 1}</p><p class="question-text">${q.text}</p>`;
+      if (q.code) html += `<pre><code>${q.code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></pre>`;
+      html += `<ul class="options">`;
+      q.options.forEach((opt, i) => { html += `<li><label><input type="radio" name="q${currentQuestion}" value="${i}"><span>${opt}</span></label></li>`; });
+      html += `</ul><div style="margin-top:1rem;"><button class="btn btn-primary" id="validateBtn" onclick="validate()">Valider</button></div><div class="feedback" id="feedback"></div></div>`;
+      document.getElementById('quizContainer').innerHTML = html;
+    }
+    function validate() {
+      if (answered) { nextQuestion(); return; }
+      const sel = document.querySelector(`input[name="q${currentQuestion}"]:checked`);
+      if (!sel) return;
+      answered = true;
+      const val = parseInt(sel.value), q = questions[currentQuestion], fb = document.getElementById('feedback'), btn = document.getElementById('validateBtn');
+      document.querySelectorAll(`input[name="q${currentQuestion}"]`).forEach(r => r.disabled = true);
+      if (val === q.answer) { score++; fb.className = 'feedback correct'; fb.innerHTML = `<strong>Correct !</strong><br>${q.explanation}`; }
+      else { fb.className = 'feedback wrong'; fb.innerHTML = `<strong>Incorrect</strong> — La bonne réponse était : <em>${q.options[q.answer]}</em><br><br>${q.explanation}`; }
+      btn.textContent = currentQuestion < questions.length - 1 ? 'Suivant' : 'Voir le score';
+    }
+    function nextQuestion() { currentQuestion++; if (currentQuestion < questions.length) renderQuestion(); else showScore(); }
+    function showScore() {
+      document.getElementById('quizContainer').classList.add('hidden');
+      document.getElementById('progressBar').style.width = '100%';
+      document.getElementById('progressText').textContent = 'Terminé !';
+      const sc = document.getElementById('scoreContainer'); sc.classList.remove('hidden');
+      sc.innerHTML = `<div class="score">${score} / ${questions.length}</div><p class="score-label">${score === questions.length ? 'Parfait ! Excellente maîtrise !' : score >= 3 ? 'Bon travail ! Révisez les points manqués.' : 'Continuez à étudier, vous progresserez !'}</p><button class="btn-restart" onclick="restart()">Recommencer</button>`;
+    }
+    function restart() { currentQuestion = 0; score = 0; document.getElementById('scoreContainer').classList.add('hidden'); document.getElementById('quizContainer').classList.remove('hidden'); renderQuestion(); }
+    renderQuestion();
+  </script>
+</body>
+</html>

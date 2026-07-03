@@ -1,986 +1,438 @@
-# Module 03 — Les en-tetes HTTP
-
-> **Objectif** : Maîtriser les en-tetes HTTP essentiels, comprendre la negociation de contenu, les headers CORS, et surtout l'impact critique de `Vary` sur le caching.
-> **Difficulte** : ⭐⭐ (Intermédiaire)
-
+---
+titre: Les en-têtes HTTP
+cours: 11-http-caching
+notions: [en-têtes de représentation, Content-Type, Content-Encoding gzip/brotli, Content-Length, Content-Language, négociation de contenu, Accept/Accept-Encoding/Accept-Language, Vary comme clé de cache, en-têtes de cache en survol, CORS et Access-Control, en-têtes de sécurité, requêtes conditionnelles If-*, Range et Accept-Ranges, Set-Cookie et attributs]
+outcomes: [catégoriser un en-tête HTTP par sa fonction, lire et écrire les en-têtes de représentation et de négociation, expliquer le rôle de Vary comme clé de cache et l'appliquer correctement]
+prerequis: [02-http2-http3]
+next: 04-cache-control
+libs: []
+tribuzen: en-têtes de l'API TribuZen (Content-Type JSON, Vary Accept-Encoding, CORS app mobile, compression brotli) et impact de Vary sur le cache CDN
+last-reviewed: 2026-07
 ---
 
-## 1. Introduction aux en-tetes HTTP
+# Les en-têtes HTTP
 
-### 1.1 L'analogie des etiquettes sur un colis
+> **Outcomes — tu sauras FAIRE :** catégoriser un en-tête HTTP par sa fonction (représentation, négociation, cache, CORS, sécurité, conditionnel, cookie), lire et écrire les en-têtes de représentation et de négociation, expliquer et appliquer `Vary` comme clé de cache.
+> **Difficulté :** :star::star:
 
-Les en-tetes HTTP sont comme les **etiquettes collees sur un colis** postal :
+## 1. Cas concret d'abord
 
-```
-+--------------------------------------------------+
-|  COLIS (Message HTTP)                            |
-|                                                  |
-|  +--------------------------------------------+  |
-|  | ETIQUETTES (Headers)                       |  |
-|  |                                            |  |
-|  | Destinataire: api.example.com    (Host)    |  |
-|  | Type de contenu: JSON           (Content-Type)|
-|  | Poids: 2.3 kg                   (Content-Length)|
-|  | Fragile !                       (Cache-Control) |
-|  | Date d'envoi: 7 mars 2026       (Date)     |  |
-|  | Ne pas ouvrir avant le 14 mars  (Expires)  |  |
-|  | Empreinte: #ABC123              (ETag)      |  |
-|  +--------------------------------------------+  |
-|                                                  |
-|  +--------------------------------------------+  |
-|  | CONTENU (Body)                              |  |
-|  | {"name": "Alice", "age": 30}               |  |
-|  +--------------------------------------------+  |
-|                                                  |
-+--------------------------------------------------+
-```
-
-### 1.2 Syntaxe d'un header
-
-```
-Nom-Du-Header: valeur
-```
-
-**Regles :**
-- Le nom est **insensible à la casse** (`Content-Type` = `content-type`)
-- La valeur peut contenir presque n'importe quoi
-- Un header peut apparaître **plusieurs fois** (les valeurs sont alors concatenees avec des virgules)
-- En HTTP/2 et HTTP/3, les noms sont toujours en **minuscules**
-
-```
-# Exemples de headers
-Content-Type: application/json
-Cache-Control: public, max-age=3600
-Accept: text/html, application/json
-Set-Cookie: session=abc123
-Set-Cookie: theme=dark           <-- Meme header, deux fois
-```
-
-### 1.3 Categories de headers
-
-Les en-tetes se repartissent en plusieurs categories :
-
-```
-+------------------------------------------------------------------+
-|                    CATEGORIES DE HEADERS                          |
-+------------------------------------------------------------------+
-|                                                                  |
-|  GENERAUX (les deux sens)          REQUETE (client -> serveur)   |
-|  +------------------------+        +---------------------------+ |
-|  | Date                   |        | Host                      | |
-|  | Connection             |        | User-Agent                | |
-|  | Cache-Control          |        | Accept                    | |
-|  | Transfer-Encoding      |        | Accept-Encoding           | |
-|  +------------------------+        | Accept-Language           | |
-|                                    | Authorization             | |
-|  REPONSE (serveur -> client)       | If-None-Match             | |
-|  +------------------------+        | If-Modified-Since         | |
-|  | Server                 |        | Cookie                    | |
-|  | Set-Cookie             |        | Origin                    | |
-|  | WWW-Authenticate       |        | Referer                   | |
-|  | Location               |        +---------------------------+ |
-|  | Access-Control-*       |                                      |
-|  +------------------------+        ENTITE (decrit le body)       |
-|                                    +---------------------------+ |
-|  CACHE (controle du cache)         | Content-Type              | |
-|  +------------------------+        | Content-Length            | |
-|  | Cache-Control          |        | Content-Encoding         | |
-|  | ETag                   |        | Content-Language         | |
-|  | Expires                |        | Content-Disposition      | |
-|  | Last-Modified          |        +---------------------------+ |
-|  | Vary                   |                                      |
-|  +------------------------+                                      |
-+------------------------------------------------------------------+
-```
-
----
-
-## 2. Content-Type, Content-Length, Content-Encoding
-
-### 2.1 Content-Type : "Qu'est-ce qu'il y a dans le colis ?"
-
-Le header `Content-Type` indique le **type MIME** du contenu.
-
-**Analogie** : C'est comme l'etiquette "Fragile - Verre" ou "Denrees perissables" sur un colis. Ça dit au destinataire comment traiter le contenu.
-
-```
-Content-Type: type/sous-type; parametre=valeur
-```
-
-**Types MIME courants :**
-
-| Content-Type                          | Utilisation                     |
-|---------------------------------------|---------------------------------|
-| `text/html; charset=utf-8`           | Pages HTML                      |
-| `text/css`                            | Feuilles de style               |
-| `text/javascript`                     | Code JavaScript                 |
-| `application/json`                    | Donnees JSON (API)              |
-| `application/xml`                     | Donnees XML                     |
-| `application/octet-stream`            | Fichier binaire générique       |
-| `image/png`                           | Image PNG                       |
-| `image/jpeg`                          | Image JPEG                      |
-| `image/webp`                          | Image WebP                      |
-| `image/avif`                          | Image AVIF                      |
-| `image/svg+xml`                       | Image SVG                       |
-| `font/woff2`                          | Police WOFF2                    |
-| `application/pdf`                     | Document PDF                    |
-| `multipart/form-data`                 | Formulaire avec fichiers        |
-
-```typescript
-// server-content-types.ts
-// Serveur qui repond avec differents Content-Types
-
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-
-  if (req.url === '/html') {
-    // --- Reponse HTML ---
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',  // charset important !
-    });
-    res.end('<h1>Bonjour le monde !</h1>');
-  }
-  else if (req.url === '/json') {
-    // --- Reponse JSON ---
-    const data: { message: string; items: number[] } = { message: 'Bonjour', items: [1, 2, 3] };
-    const body: string = JSON.stringify(data);
-    res.writeHead(200, {
-      'Content-Type': 'application/json',   // Le navigateur sait que c'est du JSON
-      'Content-Length': Buffer.byteLength(body),  // Taille exacte en octets
-    });
-    res.end(body);
-  }
-  else if (req.url === '/css') {
-    // --- Reponse CSS ---
-    const css: string = 'body { background: #f0f0f0; font-family: sans-serif; }';
-    res.writeHead(200, {
-      'Content-Type': 'text/css; charset=utf-8',
-    });
-    res.end(css);
-  }
-  else if (req.url === '/svg') {
-    // --- Reponse SVG ---
-    const svg: string = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">' +
-                '<circle cx="50" cy="50" r="40" fill="blue"/></svg>';
-    res.writeHead(200, {
-      'Content-Type': 'image/svg+xml',
-    });
-    res.end(svg);
-  }
-  else {
-    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('Essaie /html, /json, /css ou /svg');
-  }
-});
-
-server.listen(3000, () => console.log('http://localhost:3000'));
-```
-
-**Pourquoi Content-Type est crucial ?** Si tu envoies du HTML avec `Content-Type: text/plain`, le navigateur affichera le code source au lieu de rendre la page. Un mauvais Content-Type peut aussi causer des failles de sécurité (MIME sniffing).
-
-### 2.2 Content-Length : "Combien pese le colis ?"
-
-```
-Content-Length: 4521
-```
-
-- Indique la taille **exacte** du body en octets
-- Permet au client de savoir quand il a tout recu
-- **Important pour le cache** : permet de vérifier l'integrite du telechargement
-
-```typescript
-// Attention : Content-Length doit etre en OCTETS, pas en caracteres
-const body: string = 'Cafe avec des accents : eee';
-console.log(body.length);                    // 27 caracteres
-console.log(Buffer.byteLength(body, 'utf8')); // 27 octets (ici pareil)
-
-const bodyAccents: string = 'Cafe avec des accents : \u00e9\u00e8\u00ea';
-console.log(bodyAccents.length);                    // 28 caracteres
-console.log(Buffer.byteLength(bodyAccents, 'utf8')); // 31 octets (3 accents = 2 octets chacun)
-```
-
-### 2.3 Content-Encoding : "Comment le colis est emballe ?"
-
-La compression HTTP reduit la taille des donnees transferees :
-
-```
-SANS COMPRESSION :
-==================
-Serveur --> [100 Ko de HTML brut] --> Client
-Temps de transfert : ~50ms
-
-
-AVEC COMPRESSION gzip :
-========================
-Serveur --> [Compression gzip] --> [25 Ko de HTML compresse] --> Client
-                                                                   |
-                                                          [Decompression]
-                                                                   |
-                                                          [100 Ko de HTML]
-Temps de transfert : ~12ms
-Gain : 75% de bande passante !
-```
-
-**Les algorithmes de compression :**
-
-| Algorithme | Header                          | Ratio typique | Support  |
-|------------|---------------------------------|---------------|----------|
-| gzip       | `Content-Encoding: gzip`        | 70-80%        | Universel|
-| deflate    | `Content-Encoding: deflate`     | 70-80%        | Ancien   |
-| Brotli     | `Content-Encoding: br`          | 80-90%        | Moderne  |
-| zstd       | `Content-Encoding: zstd`        | 85-92%        | Emergent |
-
-**Brotli (br) est généralement meilleur que gzip** pour le texte web (HTML, CSS, JS, JSON).
-
-```typescript
-// server-compression.ts
-// Serveur avec compression gzip et Brotli
-
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-import zlib from 'node:zlib';    // Module de compression natif
-
-const LARGE_HTML: string = `
-<!DOCTYPE html>
-<html>
-<head><title>Page avec beaucoup de contenu</title></head>
-<body>
-${'<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>\n'.repeat(100)}
-</body>
-</html>
-`;
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  // Lire le header Accept-Encoding du client
-  const acceptEncoding: string = (req.headers['accept-encoding'] as string) || '';
-
-  console.log(`Accept-Encoding: ${acceptEncoding}`);
-  console.log(`Taille originale: ${Buffer.byteLength(LARGE_HTML)} octets`);
-
-  if (acceptEncoding.includes('br')) {
-    // Le client accepte Brotli (meilleure compression)
-    const compressed: Buffer = zlib.brotliCompressSync(Buffer.from(LARGE_HTML));
-    console.log(`Taille Brotli: ${compressed.length} octets`);
-
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Content-Encoding': 'br',                    // Indique la compression
-      'Content-Length': compressed.length,          // Taille COMPRESSEE
-      'Cache-Control': 'max-age=60',
-      'Vary': 'Accept-Encoding',                   // CRITIQUE ! (voir section 6)
-    });
-    res.end(compressed);
-  }
-  else if (acceptEncoding.includes('gzip')) {
-    // Le client accepte gzip
-    const compressed: Buffer = zlib.gzipSync(Buffer.from(LARGE_HTML));
-    console.log(`Taille gzip: ${compressed.length} octets`);
-
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Content-Encoding': 'gzip',
-      'Content-Length': compressed.length,
-      'Cache-Control': 'max-age=60',
-      'Vary': 'Accept-Encoding',
-    });
-    res.end(compressed);
-  }
-  else {
-    // Pas de compression
-    console.log('Pas de compression');
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Content-Length': Buffer.byteLength(LARGE_HTML),
-      'Cache-Control': 'max-age=60',
-      'Vary': 'Accept-Encoding',
-    });
-    res.end(LARGE_HTML);
-  }
-});
-
-server.listen(3000, () => console.log('http://localhost:3000'));
-```
-
-**Tester :**
+L'API TribuZen sert la liste des membres d'une famille à deux clients : l'app web (React) et l'app mobile (React Native). Un CDN est placé devant l'API pour soulager le serveur. Un dev a activé la compression et la traduction côté serveur, puis a constaté ce bug en production :
 
 ```bash
-# Sans compression
-curl -s -o /dev/null -w "Taille: %{size_download} octets\n" http://localhost:3000
+# 1er appel — app web, Chrome, veut du brotli, en français
+curl -s -D - -o /dev/null https://api.tribuzen.app/families/42/members \
+  -H "Accept-Encoding: br" \
+  -H "Accept-Language: fr"
+# HTTP/2 200
+# content-type: application/json
+# content-encoding: br
+# content-language: fr
+# cache-control: public, max-age=300
+# (le CDN met cette réponse en cache sous la clé = URL)
 
-# Avec gzip
-curl -s -o /dev/null -w "Taille: %{size_download} octets\n" \
-  -H "Accept-Encoding: gzip" http://localhost:3000
-
-# Avec Brotli
-curl -s -o /dev/null -w "Taille: %{size_download} octets\n" \
-  -H "Accept-Encoding: br" http://localhost:3000
+# 2e appel — app mobile, ne gère pas brotli, veut de l'anglais
+curl -s -D - -o /dev/null https://api.tribuzen.app/families/42/members \
+  -H "Accept-Encoding: gzip" \
+  -H "Accept-Language: en"
+# HTTP/2 200  (age: 12)  <-- servi depuis le cache CDN !
+# content-encoding: br   <-- BROTLI alors que le client a demandé gzip
+# content-language: fr   <-- FRANÇAIS alors que le client a demandé en
+# => l'app mobile reçoit des octets brotli qu'elle ne sait pas décompresser
+#    => JSON illisible, écran blanc
 ```
 
----
+Le serveur **adapte** sa réponse selon `Accept-Encoding` et `Accept-Language`, mais il n'a **pas dit au CDN** que la réponse dépendait de ces en-têtes. Le CDN a donc réutilisé la première version pour tout le monde.
 
-## 3. Negociation de contenu (Content Negotiation)
-
-### 3.1 Le principe
-
-La negociation de contenu permet au client de dire au serveur **sous quelle forme** il souhaite la réponse. C'est comme commander un cafe : "Un cafe, s'il vous plait. De préférence un expresso, sinon un allonge ira aussi."
+La correction tient en un seul en-tête de réponse :
 
 ```
-CLIENT                                          SERVEUR
-  |                                                |
-  |  GET /article/42                               |
-  |  Accept: application/json, text/html;q=0.9     |
-  |  Accept-Encoding: br, gzip                     |
-  |  Accept-Language: fr-FR, fr;q=0.9, en;q=0.5    |
-  |  ------------------------------------------->  |
-  |                                                |
-  |  Le serveur choisit la meilleure combinaison : |
-  |  - Format: JSON (preference 1.0)               |
-  |  - Compression: Brotli (br)                    |
-  |  - Langue: Francais (fr-FR)                    |
-  |                                                |
-  |  HTTP/1.1 200 OK                               |
-  |  Content-Type: application/json                 |
-  |  Content-Encoding: br                           |
-  |  Content-Language: fr-FR                        |
-  |  Vary: Accept, Accept-Encoding, Accept-Language |
-  |  <-------------------------------------------  |
-```
-
-### 3.2 Accept : "Quel format de réponse ?"
-
-```
-Accept: application/json                          # Je veux du JSON
-Accept: text/html                                 # Je veux du HTML
-Accept: text/html, application/json;q=0.9         # HTML de preference, JSON sinon
-Accept: image/webp, image/png;q=0.8, image/*;q=0.5  # WebP > PNG > n'importe quelle image
-Accept: */*                                       # N'importe quoi
-```
-
-**Le paramètre `q` (quality)** indique la préférence de 0 a 1 :
-
-```
-Accept: text/html;q=1.0, application/json;q=0.9, text/plain;q=0.5, */*;q=0.1
-         ^^^^^^^^^^^^      ^^^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^  ^^^^^^^^
-         Priorite 1 (100%) Priorite 2 (90%)        Priorite 3 (50%) Dernier recours (10%)
-```
-
-### 3.3 Accept-Encoding : "Quelle compression ?"
-
-```
-Accept-Encoding: br, gzip, deflate
-                 ^^  ^^^^  ^^^^^^^
-                 Brotli (prefere)
-                      gzip (classique)
-                             deflate (ancien)
-```
-
-Le navigateur moderne envoie typiquement : `Accept-Encoding: gzip, deflate, br`
-
-### 3.4 Accept-Language : "Quelle langue ?"
-
-```
-Accept-Language: fr-FR, fr;q=0.9, en-US;q=0.8, en;q=0.7
-                 ^^^^^  ^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^
-                 Francais de France (preference max)
-                         Francais generique (90%)
-                                    Anglais US (80%)
-                                                 Anglais generique (70%)
-```
-
-```typescript
-// server-content-negotiation.ts
-// Serveur avec negociation de contenu complete
-
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-
-interface ArticleTranslation {
-  [key: string]: string;
-}
-
-interface ArticlesByLang {
-  fr: ArticleTranslation;
-  en: ArticleTranslation;
-}
-
-const articles: Record<number, ArticlesByLang> = {
-  42: {
-    fr: { titre: 'Mon article en francais', contenu: 'Contenu francais...' },
-    en: { title: 'My article in English', content: 'English content...' },
-  }
-};
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  if (req.url !== '/article/42') {
-    res.writeHead(404);
-    return res.end('Not found');
-  }
-
-  // --- Negocier la langue ---
-  const acceptLang: string = (req.headers['accept-language'] as string) || 'en';
-  const lang: 'fr' | 'en' = acceptLang.includes('fr') ? 'fr' : 'en';
-  const article: ArticleTranslation = articles[42][lang];
-
-  // --- Negocier le format ---
-  const accept: string = (req.headers['accept'] as string) || 'text/html';
-
-  if (accept.includes('application/json')) {
-    // Reponse JSON
-    const body: string = JSON.stringify(article);
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Content-Language': lang,
-      'Cache-Control': 'max-age=300',
-      'Vary': 'Accept, Accept-Language',    // CRUCIAL pour le cache
-    });
-    res.end(body);
-  } else {
-    // Reponse HTML
-    const key: string = lang === 'fr' ? 'titre' : 'title';
-    const contentKey: string = lang === 'fr' ? 'contenu' : 'content';
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Content-Language': lang,
-      'Cache-Control': 'max-age=300',
-      'Vary': 'Accept, Accept-Language',
-    });
-    res.end(`<html><body><h1>${article[key]}</h1><p>${article[contentKey]}</p></body></html>`);
-  }
-});
-
-server.listen(3000, () => console.log('http://localhost:3000'));
-```
-
-**Tester :**
-
-```bash
-# JSON en francais
-curl -H "Accept: application/json" -H "Accept-Language: fr" http://localhost:3000/article/42
-
-# HTML en anglais
-curl -H "Accept: text/html" -H "Accept-Language: en" http://localhost:3000/article/42
-
-# JSON en anglais
-curl -H "Accept: application/json" -H "Accept-Language: en" http://localhost:3000/article/42
-```
-
----
-
-## 4. Les headers CORS
-
-### 4.1 Le problème des origines croisees
-
-**Analogie** : Imagine un immeuble sécurisé. Chaque appartement (origine) a sa propre serrure. Tu ne peux pas entrer dans l'appartement du voisin (autre origine) sans sa permission explicite.
-
-```
-MEME ORIGINE (Same-Origin) :
-  https://example.com/page1 --> https://example.com/api/data   OK !
-  (meme protocole + meme domaine + meme port)
-
-ORIGINES DIFFERENTES (Cross-Origin) :
-  https://mon-site.com --> https://api.autre-site.com/data    BLOQUE !
-  (domaines differents)
-
-  http://example.com --> https://example.com/data              BLOQUE !
-  (protocoles differents)
-
-  https://example.com --> https://example.com:8080/data        BLOQUE !
-  (ports differents)
-```
-
-### 4.2 Les headers CORS essentiels
-
-```
-REQUETE PREFLIGHT (OPTIONS)                 REPONSE DU SERVEUR
-================================            ================================
-
-OPTIONS /api/data HTTP/1.1                  HTTP/1.1 204 No Content
-Host: api.example.com                       Access-Control-Allow-Origin: https://mon-site.com
-Origin: https://mon-site.com                Access-Control-Allow-Methods: GET, POST, PUT
-Access-Control-Request-Method: POST         Access-Control-Allow-Headers: Content-Type, Authorization
-Access-Control-Request-Headers:             Access-Control-Max-Age: 86400
-  Content-Type, Authorization
-```
-
-| Header CORS                          | Direction         | Description                                    |
-|--------------------------------------|-------------------|------------------------------------------------|
-| `Origin`                             | Requête           | L'origine de la page qui fait la requête       |
-| `Access-Control-Allow-Origin`        | Reponse           | Origines autorisees (`*` ou une URL spécifique)|
-| `Access-Control-Allow-Methods`       | Reponse           | Méthodes HTTP autorisees                       |
-| `Access-Control-Allow-Headers`       | Reponse           | Headers personnalises autorises                |
-| `Access-Control-Max-Age`             | Reponse           | Duree de cache du preflight (en secondes)      |
-| `Access-Control-Allow-Credentials`   | Reponse           | Autoriser les cookies cross-origin             |
-| `Access-Control-Expose-Headers`      | Reponse           | Headers visibles par le JavaScript client      |
-
-### 4.3 Impact de CORS sur le cache
-
-**`Access-Control-Max-Age`** est un header de cache spécifique aux preflight :
-
-```
-Access-Control-Max-Age: 86400    # Cacher le preflight pendant 24h
-
-SANS max-age :
-  Requete 1: OPTIONS (preflight) --> POST (requete reelle)
-  Requete 2: OPTIONS (preflight) --> POST (requete reelle)  <-- Preflight refait !
-  Requete 3: OPTIONS (preflight) --> POST (requete reelle)  <-- Encore !
-
-AVEC max-age: 86400 :
-  Requete 1: OPTIONS (preflight) --> POST (requete reelle)
-  Requete 2: POST (requete reelle)    <-- Pas de preflight !
-  Requete 3: POST (requete reelle)    <-- Pas de preflight !
-  ...pendant 24h...
-```
-
-```typescript
-// server-cors.ts
-// Serveur avec CORS configure correctement
-
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-
-const ALLOWED_ORIGINS: string[] = ['http://localhost:5173', 'https://mon-site.com'];
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  const origin: string | undefined = req.headers['origin'];
-
-  // Verifier si l'origine est autorisee
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    // IMPORTANT : Vary: Origin si la reponse depend de l'origine
-    res.setHeader('Vary', 'Origin');
-  }
-
-  // --- Requete preflight ---
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Max-Age', '86400');  // Cache 24h
-    res.writeHead(204);
-    return res.end();
-  }
-
-  // --- Requete normale ---
-  if (req.url === '/api/data') {
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'max-age=60',
-    });
-    res.end(JSON.stringify({ data: 'Donnees de API' }));
-  } else {
-    res.writeHead(404);
-    res.end('Not found');
-  }
-});
-
-server.listen(3000, () => console.log('API CORS sur http://localhost:3000'));
-```
-
----
-
-## 5. Transfer-Encoding: chunked
-
-### 5.1 Le problème : réponses de taille inconnue
-
-Parfois, le serveur ne connait pas a l'avance la taille de la réponse. Par exemple, quand il généré du contenu dynamiquement ou streame des donnees.
-
-**Analogie** : Au lieu d'envoyer un gros colis, tu envoies une serie de petits paquets numérotés. Le destinataire sait que c'est fini quand il recoit un paquet vide.
-
-```
-REPONSE CLASSIQUE (Content-Length connu)
-=========================================
-HTTP/1.1 200 OK
-Content-Length: 4521        <-- "Le colis fait 4521 octets"
-
-[4521 octets de donnees]
-
-
-REPONSE CHUNKED (taille inconnue)
-===================================
-HTTP/1.1 200 OK
-Transfer-Encoding: chunked  <-- "Je t'envoie par morceaux"
-
-1a                          <-- Taille du morceau en hexadecimal (26 octets)
-Voici le premier morceau
-15                          <-- 21 octets
-Et voici le deuxieme
-12                          <-- 18 octets
-Et le dernier ...
-0                           <-- Morceau de taille 0 = FIN
-                            <-- Ligne vide finale
-```
-
-### 5.2 Chunked en pratique avec Node.js
-
-```typescript
-// server-chunked.ts
-// Serveur qui envoie une reponse en morceaux (streaming)
-
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-
-  if (req.url === '/stream') {
-    // --- Reponse streamee ---
-    res.writeHead(200, {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Transfer-Encoding': 'chunked',    // Node.js l'ajoute automatiquement
-      // PAS de Content-Length ! (incompatible avec chunked)
-      'Cache-Control': 'no-store',       // On ne cache pas les streams
-    });
-
-    let count: number = 0;
-    const interval: ReturnType<typeof setInterval> = setInterval(() => {
-      count++;
-      res.write(`Morceau ${count} envoye a ${new Date().toISOString()}\n`);
-
-      if (count >= 5) {
-        clearInterval(interval);
-        res.end('--- FIN DU STREAM ---\n');  // Dernier morceau + fin
-      }
-    }, 1000);  // Un morceau par seconde
-
-  } else if (req.url === '/sse') {
-    // --- Server-Sent Events (SSE) ---
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',   // Type MIME special pour SSE
-      'Cache-Control': 'no-cache',           // Pas de cache pour les evenements
-      'Connection': 'keep-alive',
-    });
-
-    let eventId: number = 0;
-    const interval: ReturnType<typeof setInterval> = setInterval(() => {
-      eventId++;
-      // Format SSE : "data: <contenu>\n\n"
-      res.write(`id: ${eventId}\ndata: {"time": "${new Date().toISOString()}", "count": ${eventId}}\n\n`);
-
-      if (eventId >= 10) {
-        clearInterval(interval);
-        res.end();
-      }
-    }, 2000);
-
-    // Si le client se deconnecte
-    req.on('close', () => {
-      clearInterval(interval);
-      console.log('Client deconnecte du SSE');
-    });
-
-  } else {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Essaie /stream ou /sse');
-  }
-});
-
-server.listen(3000, () => console.log('http://localhost:3000'));
-```
-
-**Tester :**
-
-```bash
-# Voir les morceaux arriver un par un
-curl -N http://localhost:3000/stream
-
-# Voir les events SSE
-curl -N http://localhost:3000/sse
-```
-
-**Pourquoi Transfer-Encoding est important pour le cache ?** Une réponse chunked **sans Content-Length** est plus difficile a cacher car le cache ne sait pas quelle taille allouer. De plus, les réponses streamees (SSE) ne sont généralement **jamais cachees**.
-
----
-
-## 6. Vary — L'en-tete le plus important pour le cache
-
-### 6.1 Le problème sans Vary
-
-**Analogie** : Imagine un bureau de poste qui garde une copie de chaque lettre qu'il distribue. Un client francophone demandé la lettre #42 et recoit la version francaise. Le bureau garde cette copie. Ensuite, un client anglophone demandé aussi la lettre #42. Le bureau lui donne... la version francaise ! C'est un bug.
-
-```
-PROBLEME SANS VARY :
-=====================
-
-Requete 1 (navigateur Chrome, avec gzip) :
-  GET /page.html
-  Accept-Encoding: gzip
-
-  Reponse : Content-Encoding: gzip + [donnees compressees gzip]
-  --> Le cache stocke : /page.html = [donnees gzip]
-
-Requete 2 (vieux navigateur, sans compression) :
-  GET /page.html
-  Accept-Encoding: (absent)
-
-  Le cache dit : "J'ai /page.html en cache !"
-  --> Il renvoie les donnees gzip au client qui ne les comprend PAS
-  --> PAGE CASSEE !
-```
-
-### 6.2 La solution : Vary
-
-Le header `Vary` dit au cache : **"Cette réponse depend de tel(s) header(s) de la requête. Stocke une version différente pour chaque combinaison."**
-
-```
-AVEC VARY: Accept-Encoding
-============================
-
-Le cache stocke maintenant :
-
-CLE DE CACHE                              VALEUR EN CACHE
-/page.html + Accept-Encoding: gzip   --> [reponse gzip]
-/page.html + Accept-Encoding: br     --> [reponse Brotli]
-/page.html + Accept-Encoding: (vide) --> [reponse non compressee]
-
-Requete avec gzip    -> cache sert la version gzip
-Requete avec br      -> cache sert la version Brotli
-Requete sans encoding -> cache sert la version non compressee
-```
-
-```
-Vary: Accept-Encoding
 Vary: Accept-Encoding, Accept-Language
-Vary: Accept-Encoding, Accept-Language, Origin
-Vary: *                                           # NE JAMAIS CACHER (chaque requete est unique)
 ```
 
-### 6.3 Vary en detail
+Ce module fait le panorama structuré des en-têtes HTTP par catégorie, puis insiste sur les deux points qui cassent le plus souvent le cache : la **négociation de contenu** et l'en-tête **`Vary`**, qui définit la clé de cache.
+
+---
+
+## 2. Théorie complète, concise
+
+Un en-tête est une paire `Nom: valeur`. Le nom est insensible à la casse (en HTTP/2 et HTTP/3 il est toujours transmis en minuscules — voir module 02). On les classe par **fonction**, pas par direction. Voici les sept catégories utiles.
+
+### 2.1 En-têtes de représentation — « quelle forme a le corps »
+
+Ils décrivent les octets du body : format, compression, taille, langue.
 
 ```
-+---------------------------------------------------------------------+
-|                    IMPACT DE VARY SUR LE CACHE                       |
-+---------------------------------------------------------------------+
-|                                                                     |
-| Sans Vary :                                                         |
-|   Cle de cache = URL                                                |
-|   /page.html --> 1 seule version en cache                           |
-|                                                                     |
-| Vary: Accept-Encoding :                                             |
-|   Cle de cache = URL + Accept-Encoding                              |
-|   /page.html + gzip    --> version gzip                             |
-|   /page.html + br      --> version Brotli                           |
-|   /page.html + identity --> version non compressee                  |
-|                                                                     |
-| Vary: Accept-Encoding, Accept-Language :                            |
-|   Cle de cache = URL + Accept-Encoding + Accept-Language            |
-|   /page.html + gzip + fr --> version gzip francaise                 |
-|   /page.html + gzip + en --> version gzip anglaise                  |
-|   /page.html + br   + fr --> version Brotli francaise               |
-|   /page.html + br   + en --> version Brotli anglaise                |
-|   = 4 versions en cache ! (2 encodages x 2 langues)                |
-|                                                                     |
-| Vary: * :                                                           |
-|   Cle de cache = ??? (impossible a determiner)                      |
-|   = Ressource non cachable !                                        |
-|                                                                     |
-+---------------------------------------------------------------------+
+Content-Type:     application/json; charset=utf-8   # format MIME (+ charset)
+Content-Encoding: br                                # compression appliquée au body
+Content-Length:   1834                              # taille EXACTE du body, en octets
+Content-Language: fr                                # langue naturelle du contenu
 ```
 
-**Pourquoi Vary est CRITIQUE ?**
+- **`Content-Type`** — le type MIME. Un mauvais `Content-Type` casse tout : du HTML servi en `text/plain` s'affiche comme source ; du JSON sans `application/json` peut ne pas être parsé. Le `charset` fait partie de la valeur.
+- **`Content-Encoding`** — la compression **de bout en bout** appliquée au body. Valeurs courantes : `gzip` (universel, ~70 %), `br` (brotli, moderne, ~80 % sur le texte), `zstd` (émergent). Le client doit décompresser lui-même. À distinguer de `Transfer-Encoding: chunked` qui est un encodage **de transport** (hop-by-hop), pas une compression de contenu.
+- **`Content-Length`** — nombre d'octets du body (pas de caractères : un `é` UTF-8 = 2 octets). Absent quand la réponse est en `Transfer-Encoding: chunked` (taille inconnue à l'avance, ex. streaming).
+- **`Content-Language`** — la langue du contenu renvoyé (résultat de la négociation).
 
-1. **Sans Vary** sur un serveur qui fait de la negociation de contenu, les clients recevront potentiellement la **mauvaise version** depuis le cache.
-2. **Trop de Vary** (ex: `Vary: User-Agent`) explose le nombre de versions en cache, rendant le cache inefficace.
-3. **Vary: Cookie** est particulierement problematique car chaque utilisateur a des cookies différents, ce qui rend le cache pratiquement inutile pour les caches partages (CDN, proxy).
+### 2.2 En-têtes de négociation de contenu — « ce que le client préfère »
 
-### 6.4 Les pieges de Vary
+Le client exprime ses préférences via les en-têtes `Accept*` ; le serveur choisit la meilleure représentation. Le paramètre de qualité `q` (0 à 1, défaut 1) ordonne les préférences.
 
 ```
-PIEGE 1 : Vary: User-Agent
-============================
-Il existe des MILLIERS de User-Agents differents.
-Chaque combinaison URL + User-Agent = une entree de cache differente.
-Le cache devient ENORME et le taux de hit CHUTE.
-
-Mauvais  : Vary: User-Agent
-Meilleur : Utiliser Client Hints (Sec-CH-UA) qui ont moins de variantes
-
-
-PIEGE 2 : Vary: Cookie
-========================
-Chaque utilisateur a des cookies differents.
-Un cache CDN avec Vary: Cookie ne sert pratiquement JAMAIS de cache hit.
-
-Mauvais  : Vary: Cookie
-Meilleur : Utiliser Cache-Control: private (cache navigateur seulement)
-
-
-PIEGE 3 : Oublier Vary quand c'est necessaire
-================================================
-Si le serveur repond differemment selon Accept-Encoding
-mais OUBLIE Vary: Accept-Encoding, le cache peut servir
-une version gzip a un client qui ne comprend pas gzip.
+Accept:          application/json, text/html;q=0.9   # JSON préféré, HTML acceptable
+Accept-Encoding: br, gzip                            # brotli préféré, gzip sinon
+Accept-Language: fr-FR, fr;q=0.9, en;q=0.5           # français d'abord, anglais en secours
 ```
 
-### 6.5 Serveur complet avec Vary
+Chaque `Accept*` (requête) a son pendant de représentation (réponse) :
+
+| Client demande (requête) | Serveur répond (réponse)            |
+|--------------------------|-------------------------------------|
+| `Accept`                 | `Content-Type`                      |
+| `Accept-Encoding`        | `Content-Encoding`                  |
+| `Accept-Language`        | `Content-Language`                  |
+
+**Point crucial :** dès que la réponse **dépend** d'un de ces en-têtes de requête, le serveur DOIT le déclarer dans `Vary` (section 2.4) — sinon un cache partagé sert la mauvaise version. C'est le lien entre négociation et cache.
+
+### 2.3 En-têtes de cache — vue d'ensemble
+
+Détaillés dans les modules 04 (Cache-Control) et 05 (ETag / validation conditionnelle). Panorama minimal ici :
+
+```
+Cache-Control: public, max-age=300     # politique de fraîcheur (module 04)
+ETag:          "a1b2c3"                 # empreinte de version (module 05)
+Last-Modified: Wed, 01 Jul 2026 10:00:00 GMT  # date de dernière modif (module 05)
+Age:           12                       # secondes passées dans un cache intermédiaire
+Expires:       Wed, 01 Jul 2026 11:00:00 GMT  # ancien mécanisme, remplacé par Cache-Control
+```
+
+Retiens ici seulement : `Cache-Control` pilote la fraîcheur, `ETag`/`Last-Modified` permettent la revalidation, et **`Vary` définit la clé de cache** — le seul en-tête de cette famille qu'on approfondit dans ce module.
+
+### 2.4 `Vary` — la clé de cache (le cœur du module)
+
+Par défaut, la **clé de cache** d'une réponse est son URL. `Vary` ajoute des en-têtes **de la requête** à cette clé : « cette réponse varie selon ces en-têtes ; stocke une version distincte par combinaison ».
+
+```
+Vary: Accept-Encoding                       # 1 version par encodage
+Vary: Accept-Encoding, Accept-Language      # 1 version par (encodage × langue)
+Vary: Origin                                # 1 version par origine (réponses CORS)
+Vary: *                                     # réponse NON cachable (chaque requête est unique)
+```
+
+Effet sur les clés de cache d'un CDN :
+
+```
+# Sans Vary : clé = URL seule
+GET /families/42/members  -->  UNE seule version stockée (bug du cas concret)
+
+# Vary: Accept-Encoding, Accept-Language : clé = URL + ces 2 en-têtes
+GET /families/42/members + (br,   fr)  -->  version brotli / française
+GET /families/42/members + (gzip, fr)  -->  version gzip   / française
+GET /families/42/members + (br,   en)  -->  version brotli / anglaise
+GET /families/42/members + (gzip, en)  -->  version gzip   / anglaise
+# = 2 encodages × 2 langues = 4 entrées de cache pour la même URL
+```
+
+Deux erreurs symétriques :
+- **Oublier `Vary`** quand on négocie → le cache sert la mauvaise version (langue/encodage faux).
+- **Trop de `Vary`** → explosion combinatoire, taux de hit qui s'effondre. `Vary: User-Agent` (des milliers de valeurs) et `Vary: Cookie` (une valeur par utilisateur) rendent un cache partagé quasi inutile. Pour du contenu par utilisateur, préférer `Cache-Control: private` (module 04) plutôt que `Vary: Cookie`.
+
+### 2.5 En-têtes CORS — « qui a le droit de lire cette réponse cross-origin »
+
+Quand une page d'une origine (protocole + domaine + port) appelle une autre origine, le navigateur applique la politique CORS. Le client envoie `Origin` ; le serveur autorise via les en-têtes `Access-Control-*`.
+
+```
+# Requête (le navigateur ajoute Origin automatiquement)
+Origin: https://app.tribuzen.app
+
+# Réponse simple
+Access-Control-Allow-Origin: https://app.tribuzen.app
+Access-Control-Allow-Credentials: true
+
+# Réponse à un préflight (méthode OPTIONS, déclenché par requête « non simple »)
+Access-Control-Allow-Methods: GET, POST, PUT, DELETE
+Access-Control-Allow-Headers: Content-Type, Authorization
+Access-Control-Max-Age: 86400        # cache du préflight côté navigateur, 24 h
+```
+
+| En-tête | Rôle |
+|---|---|
+| `Origin` (requête) | origine de la page appelante |
+| `Access-Control-Allow-Origin` | origine(s) autorisée(s) — une URL précise, ou `*` |
+| `Access-Control-Allow-Methods` | méthodes autorisées (réponse préflight) |
+| `Access-Control-Allow-Headers` | en-têtes custom autorisés (réponse préflight) |
+| `Access-Control-Allow-Credentials` | autorise l'envoi des cookies cross-origin |
+| `Access-Control-Max-Age` | durée de cache du préflight, en secondes |
+| `Access-Control-Expose-Headers` | en-têtes de réponse lisibles par le JS client |
+
+Lien avec le cache : si `Access-Control-Allow-Origin` reflète l'`Origin` de la requête (au lieu d'un `*` fixe), la réponse **dépend** de l'origine → il faut `Vary: Origin` pour que le cache ne serve pas l'entête d'une mauvaise origine.
+
+### 2.6 En-têtes de sécurité — survol
+
+Détaillés dans le cours sécurité. Ce sont des en-têtes de **réponse** qui durcissent le comportement du navigateur :
+
+```
+Strict-Transport-Security: max-age=63072000; includeSubDomains   # HSTS : force HTTPS
+Content-Security-Policy: default-src 'self'                       # CSP : sources autorisées
+X-Content-Type-Options: nosniff                                   # interdit le MIME sniffing
+X-Frame-Options: DENY                                             # anti-clickjacking (iframe)
+Referrer-Policy: strict-origin-when-cross-origin                  # ce qui fuit dans Referer
+```
+
+À retenir ici : ils ne servent pas à la négociation ni au cache, mais `X-Content-Type-Options: nosniff` renforce le rôle de `Content-Type` (le navigateur n'essaie plus de deviner le type malgré l'en-tête).
+
+### 2.7 En-têtes conditionnels, `Range`, cookies
+
+**Requêtes conditionnelles `If-*`** (détaillées module 05) — le client conditionne la réponse à l'état de la ressource :
+
+```
+If-None-Match:     "a1b2c3"                           # « réponds 304 si l'ETag est inchangé »
+If-Modified-Since: Wed, 01 Jul 2026 10:00:00 GMT      # « 304 si pas modifié depuis »
+```
+
+**`Range` / `Accept-Ranges`** — téléchargement partiel (reprise, lecture vidéo par morceaux) :
+
+```
+Accept-Ranges: bytes            # (réponse) le serveur supporte les requêtes partielles
+Range: bytes=0-1023             # (requête) « envoie-moi les 1024 premiers octets »
+# => réponse 206 Partial Content
+```
+
+**Cookies** — `Set-Cookie` (réponse) pose un cookie, `Cookie` (requête) le renvoie. Les attributs contrôlent portée et sécurité :
+
+```
+Set-Cookie: session=abc123; HttpOnly; Secure; SameSite=Lax; Max-Age=3600; Path=/
+```
+
+- `HttpOnly` — inaccessible au JS (anti-XSS).
+- `Secure` — envoyé uniquement en HTTPS.
+- `SameSite` — `Lax` / `Strict` / `None` : limite l'envoi cross-site (anti-CSRF).
+- `Max-Age` / `Expires` — durée de vie ; `Path` / `Domain` — portée.
+
+Lien avec le cache : une réponse avec `Set-Cookie` est spécifique à l'utilisateur — elle ne doit généralement pas finir dans un cache partagé (`Cache-Control: private`, module 04).
+
+---
+
+## 3. Worked examples
+
+### Exemple 1 — Catégoriser les en-têtes d'une vraie réponse
+
+On observe la réponse brute de l'API TribuZen. Objectif : ranger chaque en-tête dans sa catégorie et repérer ce qui touche le cache.
+
+```
+HTTP/2 200
+content-type: application/json; charset=utf-8       # (A) représentation
+content-encoding: br                                # (A) représentation
+content-language: fr                                # (A) représentation
+vary: accept-encoding, accept-language              # (B) NÉGOCIATION → clé de cache
+cache-control: public, max-age=300                  # (C) cache (module 04)
+etag: "7d3-fam42"                                   # (C) cache (module 05)
+age: 42                                             # (C) cache (temps en cache CDN)
+access-control-allow-origin: https://app.tribuzen.app  # (D) CORS
+strict-transport-security: max-age=63072000         # (E) sécurité
+set-cookie: sid=...; HttpOnly; Secure; SameSite=Lax # (F) cookie
+```
+
+Lecture experte, dans l'ordre :
+1. **Représentation (A)** : c'est du JSON, en français, compressé brotli. Le client doit décompresser br avant de parser.
+2. **`Vary` (B)** : la réponse dépend de `Accept-Encoding` **et** `Accept-Language`. Le CDN stockera donc une entrée par combinaison → pas de bug de version croisée. C'est la ligne qui manquait dans le cas concret.
+3. **Cache (C)** : cachable 300 s (`public`), revalidable via l'`ETag`, et elle a déjà passé 42 s dans le CDN (`age`).
+4. **Incohérence à repérer** : `set-cookie` (F) sur une réponse `cache-control: public`. Un cookie de session dans un cache **partagé** fuiterait la session d'un utilisateur vers un autre. Correctif : `Cache-Control: private` pour toute réponse posant un cookie de session.
+
+### Exemple 2 — Un serveur qui négocie et pose `Vary` correctement
+
+Serveur Node natif : il négocie encodage + langue et déclare `Vary`. C'est la version corrigée du cas concret.
 
 ```typescript
-// server-vary.ts
-// Demonstration de l'impact de Vary sur le cache
-
-import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+// server-vary.ts — négociation de contenu + Vary correct
+import http from 'node:http';
 import zlib from 'node:zlib';
 
-const CONTENT: Record<string, string> = {
-  fr: '<html><body><h1>Bonjour le monde !</h1></body></html>',
-  en: '<html><body><h1>Hello World!</h1></body></html>',
+const MEMBERS = {
+  fr: JSON.stringify({ famille: 'Les Dupont', membres: ['Alice', 'Bob'] }),
+  en: JSON.stringify({ family: 'The Duponts', members: ['Alice', 'Bob'] }),
 };
 
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-  // --- Determiner la langue ---
-  const acceptLang: string = (req.headers['accept-language'] as string) || 'en';
-  const lang: string = acceptLang.includes('fr') ? 'fr' : 'en';
-  const html: string = CONTENT[lang];
+const server = http.createServer((req, res) => {
+  // --- 1. Négocier la langue à partir d'Accept-Language ---
+  const acceptLang = (req.headers['accept-language'] ?? 'en') as string;
+  const lang: 'fr' | 'en' = acceptLang.includes('fr') ? 'fr' : 'en';
+  const json = MEMBERS[lang];
 
-  // --- Determiner la compression ---
-  const acceptEnc: string = (req.headers['accept-encoding'] as string) || '';
+  // --- 2. Négocier la compression à partir d'Accept-Encoding ---
+  const acceptEnc = (req.headers['accept-encoding'] ?? '') as string;
   let body: Buffer;
   let encoding: string | null = null;
-
   if (acceptEnc.includes('br')) {
-    body = zlib.brotliCompressSync(Buffer.from(html));
+    body = zlib.brotliCompressSync(Buffer.from(json)); // brotli préféré
     encoding = 'br';
   } else if (acceptEnc.includes('gzip')) {
-    body = zlib.gzipSync(Buffer.from(html));
+    body = zlib.gzipSync(Buffer.from(json));           // gzip en secours
     encoding = 'gzip';
   } else {
-    body = Buffer.from(html);
+    body = Buffer.from(json);                          // non compressé
   }
 
-  // --- Construire les headers de reponse ---
+  // --- 3. En-têtes de représentation + Vary (CLÉ DE CACHE) ---
   const headers: Record<string, string | number> = {
-    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Type': 'application/json; charset=utf-8',
     'Content-Language': lang,
-    'Content-Length': body.length,
-    'Cache-Control': 'public, max-age=3600',
-
-    // VARY est CRITIQUE ici !
-    // La reponse depend de Accept-Encoding ET Accept-Language.
-    // Sans ce header, un cache intermediaire (CDN, proxy)
-    // pourrait servir la version francaise gzip a un client
-    // anglophone sans compression.
+    'Content-Length': body.length,        // taille du body COMPRESSÉ, en octets
+    'Cache-Control': 'public, max-age=300',
+    // La réponse dépend de ces 2 en-têtes de requête → on DOIT le déclarer,
+    // sinon le CDN sert une version pour la mauvaise langue/encodage.
     'Vary': 'Accept-Encoding, Accept-Language',
   };
-
-  if (encoding) {
-    headers['Content-Encoding'] = encoding;
-  }
+  if (encoding) headers['Content-Encoding'] = encoding;
 
   res.writeHead(200, headers);
   res.end(body);
-
-  console.log(`Reponse: lang=${lang}, encoding=${encoding || 'none'}, size=${body.length}`);
 });
 
-server.listen(3000, () => {
-  console.log('http://localhost:3000');
-  console.log('');
-  console.log('Teste avec :');
-  console.log('  curl -H "Accept-Language: fr" -H "Accept-Encoding: gzip" http://localhost:3000');
-  console.log('  curl -H "Accept-Language: en" -H "Accept-Encoding: br" http://localhost:3000');
-  console.log('  curl -H "Accept-Language: fr" http://localhost:3000');
-});
+server.listen(3000, () => console.log('http://localhost:3000'));
+```
+
+Vérification manuelle : deux clients différents reçoivent bien deux représentations distinctes, et l'en-tête `vary` est présent.
+
+```bash
+curl -s -D - -o /dev/null http://localhost:3000 -H "Accept-Encoding: br"   -H "Accept-Language: fr"
+# content-encoding: br   content-language: fr   vary: Accept-Encoding, Accept-Language
+
+curl -s -D - -o /dev/null http://localhost:3000 -H "Accept-Encoding: gzip" -H "Accept-Language: en"
+# content-encoding: gzip content-language: en   vary: Accept-Encoding, Accept-Language
 ```
 
 ---
 
-## 7. Tableau récapitulatif des headers essentiels
+## 4. Pièges & misconceptions
 
-| Header                         | Direction | Lien avec le cache                                    |
-|--------------------------------|-----------|-------------------------------------------------------|
-| `Cache-Control`                | Les deux  | Controle principal du cache (Module 04)               |
-| `ETag`                         | Reponse   | Identifiant de version pour revalidation (Module 05)  |
-| `Last-Modified`                | Reponse   | Date de dernière modification (Module 05)             |
-| `If-None-Match`                | Requête   | Revalidation avec ETag (Module 05)                    |
-| `If-Modified-Since`            | Requête   | Revalidation avec date (Module 05)                    |
-| `Expires`                      | Reponse   | Date d'expiration (ancien, préférer Cache-Control)    |
-| `Vary`                         | Reponse   | Definit la clé de cache (CRITIQUE)                    |
-| `Content-Encoding`             | Reponse   | Compression (impacte Vary)                            |
-| `Accept-Encoding`              | Requête   | Compression souhaitee (impacte Vary)                  |
-| `Content-Type`                 | Les deux  | Type de contenu (le cache doit le preserver)          |
-| `Content-Length`               | Les deux  | Taille du body (vérification d'integrite)             |
-| `Transfer-Encoding`            | Reponse   | Chunked = difficile a cacher                          |
-| `Access-Control-Max-Age`       | Reponse   | Cache du preflight CORS                               |
-| `Age`                          | Reponse   | Temps passe dans un cache intermédiaire (en secondes) |
-| `Date`                         | Reponse   | Horodatage de la réponse originale                    |
+### PIÈGE #1 — Confondre `Content-Encoding` (compression) et `Transfer-Encoding` (transport)
 
----
+```
+# ❌ Croire que gzip = Transfer-Encoding
+Transfer-Encoding: gzip     # quasi jamais utilisé/supporté ; c'est du transport hop-by-hop
 
-## Points clés
+# ✅ La compression de contenu se déclare ainsi
+Content-Encoding: gzip      # bout en bout : le client final décompresse
+Transfer-Encoding: chunked  # transport : découpage en morceaux, taille inconnue
+```
 
-1. **Content-Type** identifie le format du contenu. Un mauvais Content-Type casse l'affichage.
-2. **Content-Encoding** (gzip, br) compresse le contenu. Brotli est généralement 15-20% meilleur que gzip.
-3. **La negociation de contenu** (Accept, Accept-Encoding, Accept-Language) permet au serveur d'adapter la réponse au client.
-4. **CORS** (Access-Control-*) controle les requêtes cross-origin. `Access-Control-Max-Age` cache les preflights.
-5. **Vary est CRITIQUE** : il dit au cache de stocker des versions différentes selon les headers de la requête. Sans lui, le cache peut servir la mauvaise version.
-6. **`Vary: *`** rend une ressource non cachable. **`Vary: Cookie`** ou **`Vary: User-Agent`** rend le cache très inefficace.
+`Content-Encoding` survit à travers les proxys (c'est le contenu même) ; `Transfer-Encoding` est renégocié à chaque saut. La compression web, c'est **toujours** `Content-Encoding`.
 
----
+### PIÈGE #2 — Négocier une réponse sans poser `Vary`
 
-## Lab associe
+```
+# ❌ Le serveur adapte selon Accept-Encoding mais ne le déclare pas
+Content-Encoding: br
+# (pas de Vary)  -> un cache partagé sert ces octets brotli à un client gzip-only => corruption
 
--> `labs/03-negociation-et-vary.md` — Experimenter avec la negociation de contenu et observer l'impact de Vary
+# ✅ Déclarer la dépendance
+Content-Encoding: br
+Vary: Accept-Encoding
+```
 
----
+Règle : **tout en-tête `Accept*` qui influence la réponse doit apparaître dans `Vary`**. C'est exactement le bug du cas concret.
 
-## Pour aller plus loin
+### PIÈGE #3 — `Vary` trop large (`User-Agent`, `Cookie`, `*`)
 
-- [MDN — HTTP Headers](https://developer.mozilla.org/fr/docs/Web/HTTP/Headers)
-- [MDN — Content Negotiation](https://developer.mozilla.org/fr/docs/Web/HTTP/Content_negotiation)
-- [MDN — CORS](https://developer.mozilla.org/fr/docs/Web/HTTP/CORS)
-- [MDN — Vary](https://developer.mozilla.org/fr/docs/Web/HTTP/Headers/Vary)
-- [Fastly — Best practices for using the Vary header](https://www.fastly.com/blog/best-practices-using-vary-header)
+```
+# ❌ Explosion combinatoire : autant d'entrées que de User-Agents / de cookies
+Vary: User-Agent
+Vary: Cookie
+Vary: *            # rend la ressource carrément non cachable
 
----
+# ✅ Ne varier que sur ce qui change vraiment la représentation partageable
+Vary: Accept-Encoding, Accept-Language
+# Pour du contenu par utilisateur : ne pas varier sur Cookie, utiliser
+Cache-Control: private
+```
 
-## Si tu es perdu
+Chaque valeur distincte d'un en-tête de `Vary` crée une entrée de cache. `Cookie` et `User-Agent` ont trop de valeurs → taux de hit proche de zéro.
 
-**Retiens juste trois choses :**
+### PIÈGE #4 — `Content-Length` en caractères au lieu d'octets
 
-1. **Content-Type** dit "c'est du JSON" ou "c'est du HTML". Content-Encoding dit "c'est compresse avec gzip".
-2. **Accept / Accept-Encoding / Accept-Language** : le client dit ce qu'il préféré, le serveur choisit la meilleure option.
-3. **Vary** : quand le serveur repond differemment selon un header de la requête (ex: langue ou compression), il DOIT ajouter `Vary: <ce-header>` sinon le cache risque de servir la mauvaise version a certains clients.
+```typescript
+// ❌ .length compte les caractères (points de code), pas les octets
+const body = 'Réservé aux modérateurs'; // accents = 2 octets chacun en UTF-8
+res.setHeader('Content-Length', body.length); // FAUX : sous-estime la taille
 
----
+// ✅ Compter les octets
+res.setHeader('Content-Length', Buffer.byteLength(body, 'utf8'));
+```
 
-## Defi
+Un `Content-Length` erroné → réponse tronquée ou connexion qui traîne. Toujours mesurer en octets (`Buffer.byteLength`), et sur le body **après** compression.
 
-### Le cache corrompu
+### PIÈGE #5 — Cacher une réponse porteuse de `Set-Cookie` dans un cache partagé
 
-**Scenario** : Tu as un serveur qui repond en français ou en anglais selon `Accept-Language`, et qui compresse en gzip ou Brotli selon `Accept-Encoding`. Un CDN (cache partage) est place devant le serveur.
+```
+# ❌ Cookie de session + cache public = fuite de session entre utilisateurs
+Cache-Control: public, max-age=600
+Set-Cookie: sid=abc123; HttpOnly
 
-**Problème** : Un utilisateur francophone avec gzip fait la première requête. Le CDN cache la réponse. Ensuite, un utilisateur anglophone avec Brotli fait la même requête. Que recoit-il ?
+# ✅ Réponse personnalisée : cache navigateur seulement, jamais un CDN/proxy
+Cache-Control: private, max-age=0
+Set-Cookie: sid=abc123; HttpOnly; Secure; SameSite=Lax
+```
 
-**Questions :**
-
-1. Si le serveur n'a PAS de header Vary, que se passe-t-il ?
-2. Si le serveur a `Vary: Accept-Language` (mais pas Accept-Encoding), que se passe-t-il ?
-3. Quel header Vary faut-il pour que tout fonctionne correctement ?
-4. Combien de versions différentes le CDN stockera-t-il au maximum ?
-
-<details>
-<summary>Reponses</summary>
-
-1. **Sans Vary** : L'utilisateur anglophone recoit la version **francaise compressees en gzip** (la version cachee). C'est la mauvaise langue ET potentiellement le mauvais encodage.
-
-2. **Avec `Vary: Accept-Language` seulement** : Le CDN stocke une version par langue. L'utilisateur anglophone recoit bien la version anglaise, MAIS elle est compresseee en gzip même si son navigateur preferait Brotli. Pire : si le premier visiteur anglophone n'avait PAS de compression, tous les anglophones recevront la version non compressee.
-
-3. **Il faut `Vary: Accept-Encoding, Accept-Language`** pour que le CDN distingue toutes les combinaisons.
-
-4. **Au maximum : 2 langues x 3 encodages (br, gzip, aucun) = 6 versions** différentes de la même URL dans le cache du CDN. C'est gerable. Mais si tu ajoutais `Vary: User-Agent`, ce serait des milliers de versions (un par navigateur x langue x encodage).
-
-</details>
+`public` autorise les caches **partagés** ; un `Set-Cookie` y est spécifique à un utilisateur.
 
 ---
 
-## Navigation
+## 5. Ancrage TribuZen
 
-| Précédent | Suivant |
-|:---------:|:-------:|
-| [Module 02 — HTTP/2 & HTTP/3](./02-http2-http3.md) | [Module 04 — Cache-Control](./04-cache-control.md) |
+L'API TribuZen (NestJS, module fil-rouge du back) et son CDN reposent directement sur ces en-têtes.
+
+**Représentation** — toutes les routes JSON renvoient `Content-Type: application/json; charset=utf-8`. Les réponses volumineuses (liste de membres, historique d'événements) sont compressées en **brotli** (`Content-Encoding: br`) avec repli gzip pour les clients anciens, via le middleware de compression du serveur.
+
+**Négociation + `Vary`** — l'API sert le français et l'anglais selon `Accept-Language`, et compresse selon `Accept-Encoding`. Chaque réponse cachable porte donc :
+
+```
+Vary: Accept-Encoding, Accept-Language
+Cache-Control: public, max-age=300
+```
+
+C'est ce `Vary` qui permet au **CDN de TribuZen** de stocker sans les mélanger : version fr/br, fr/gzip, en/br, en/gzip. Sans lui, l'app mobile (souvent gzip-only, parfois en anglais) récupérerait la version web fr/brotli mise en cache en premier — le bug du cas concret, observé pour de vrai en preview.
+
+**CORS pour l'app mobile et le web** — l'API TribuZen est appelée cross-origin par `app.tribuzen.app` (web) et par le bundle de l'app mobile. Les origines autorisées sont reflétées dynamiquement, donc la réponse ajoute `Vary: Origin` en plus, et le préflight est mis en cache 24 h côté client :
+
+```
+Access-Control-Allow-Origin: https://app.tribuzen.app
+Access-Control-Allow-Credentials: true
+Access-Control-Max-Age: 86400
+Vary: Origin, Accept-Encoding, Accept-Language
+```
+
+**Cookies de session** — les routes d'auth posent `Set-Cookie: sid=...; HttpOnly; Secure; SameSite=Lax` et forcent `Cache-Control: private` pour ne jamais atterrir dans le CDN.
 
 ---
 
-<!-- parcours-recommande -->
+## 6. Points clés
 
-::: tip Parcours recommandé
-1. **Screencast** : [screencast 03 en tetes http](../screencasts/screencast-03-en-tetes-http.md)
-2. **Lab** : [lab-03-cache-control-lab](../labs/lab-03-cache-control-lab/README)
-3. **Visualisation** : [Cache Decision Tree](../visualizations/cache-decision-tree.html)
-4. **Quiz** : [quiz 03 headers](../quizzes/quiz-03-headers.html)
-:::
+1. On classe les en-têtes par **fonction** : représentation, négociation, cache, CORS, sécurité, conditionnels/Range, cookies.
+2. **Représentation** : `Content-Type` (format MIME + charset), `Content-Encoding` (compression br/gzip), `Content-Length` (octets), `Content-Language` (langue).
+3. **Négociation** : le client envoie `Accept` / `Accept-Encoding` / `Accept-Language` avec des poids `q` ; le serveur répond avec les `Content-*` correspondants.
+4. **`Vary` est la clé de cache** : il ajoute des en-têtes de requête à la clé (URL par défaut) ; tout `Accept*` qui change la réponse doit y figurer.
+5. Oublier `Vary` → mauvaise version servie ; `Vary` trop large (`User-Agent`, `Cookie`, `*`) → cache inefficace voire non cachable.
+6. `Content-Encoding` (compression bout en bout) ≠ `Transfer-Encoding: chunked` (transport hop-by-hop, sans `Content-Length`).
+7. **CORS** : `Origin` + `Access-Control-*` ; réponse reflétant l'origine → ajouter `Vary: Origin`. **Sécurité** (HSTS, CSP, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`) et **cookies** (`Set-Cookie` + `HttpOnly`/`Secure`/`SameSite`) : une réponse à cookie de session reste `private`.
+
+---
+
+## 7. Seeds Anki
+
+```
+Comment classe-t-on les en-têtes HTTP dans ce module ?|Par fonction, pas par direction : représentation, négociation de contenu, cache, CORS, sécurité, conditionnels/Range, cookies.
+Quels en-têtes décrivent la représentation (le body) d'une réponse ?|Content-Type (MIME + charset), Content-Encoding (compression br/gzip), Content-Length (taille en octets), Content-Language (langue).
+Quelle est la différence entre Content-Encoding et Transfer-Encoding ?|Content-Encoding = compression de bout en bout du contenu (gzip, br), le client décompresse. Transfer-Encoding: chunked = encodage de transport hop-by-hop pour une taille inconnue, sans Content-Length. La compression web se déclare toujours via Content-Encoding.
+À quoi sert l'en-tête Vary et pourquoi est-il la clé de cache ?|Vary liste les en-têtes de requête dont dépend la réponse. La clé de cache par défaut est l'URL ; Vary y ajoute ces en-têtes, donc le cache stocke une version distincte par combinaison (ex. Vary: Accept-Encoding, Accept-Language). C'est indispensable dès qu'on négocie le contenu.
+Que se passe-t-il si un serveur négocie (Accept-Encoding/Language) sans poser Vary ?|Un cache partagé (CDN/proxy) réutilise la première version pour tous : un client gzip/anglais peut recevoir la version brotli/française mise en cache en premier → contenu corrompu ou mauvaise langue.
+Pourquoi Vary: Cookie ou Vary: User-Agent sont-ils déconseillés ?|Ces en-têtes ont trop de valeurs distinctes (un cookie par utilisateur, des milliers de User-Agents) → explosion du nombre d'entrées et taux de hit qui s'effondre. Pour du contenu par utilisateur, utiliser Cache-Control: private plutôt que Vary: Cookie.
+Quel en-tête CORS met en cache le préflight et lequel autorise les cookies cross-origin ?|Access-Control-Max-Age met en cache la réponse au préflight OPTIONS (en secondes). Access-Control-Allow-Credentials: true autorise l'envoi des cookies cross-origin. Si Access-Control-Allow-Origin reflète l'Origin, ajouter Vary: Origin.
+Pourquoi ne faut-il pas cacher publiquement une réponse contenant Set-Cookie ?|Cache-Control: public autorise les caches partagés ; un Set-Cookie de session y serait spécifique à un utilisateur et fuiterait sa session vers d'autres. Utiliser Cache-Control: private pour toute réponse posant un cookie de session.
+```
+
+---
+
+## Pont vers le lab
+
+> Lab associé : `11-http-caching/labs/lab-03-en-tetes-http/README.md`. Catégoriser des en-têtes réels au curl, puis observer concrètement l'effet de `Vary` sur le cache. Corrigé complet inline + variante J+30 + application TribuZen.
