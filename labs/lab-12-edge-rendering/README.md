@@ -19,12 +19,16 @@ Contrainte clé : **interdiction d'utiliser `request.geo`** (retiré en Next 15)
 ### Mise en place (le vrai outil)
 
 ```bash
-npx create-next-app@latest lab-edge --ts --app --no-tailwind --no-src-dir --no-eslint
+# On ÉPINGLE Next 15 : create-next-app@latest scaffolde désormais Next 16
+# (proxy.ts, runtime Node par défaut), ce qui casse ce lab.
+npx create-next-app@15 lab-edge --ts --app --no-tailwind --no-src-dir --no-eslint
 cd lab-edge
+# Si le scaffold a quand même tiré une version plus récente, force la 15 :
+npm install next@15 react@19 react-dom@19
 # Rien d'autre à installer : middleware + une route + curl suffisent.
 ```
 
-> Vérifie dans `package.json` que `next` est en **15.x** (ce lab suit Next 15 : fichier `middleware.ts`, Edge Runtime par défaut, `request.geo` absent). En Next 16 le fichier serait `proxy.ts` — hors périmètre de ce lab.
+> Vérifie dans `package.json` que `next` est bien en **15.x** (ce lab suit Next 15 : fichier `middleware.ts`, Edge Runtime par défaut, `request.geo` absent). En Next 16 le fichier serait `proxy.ts` (runtime Node par défaut) — hors périmètre de ce lab.
 
 ### Fichiers à produire
 

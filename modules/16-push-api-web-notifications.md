@@ -52,7 +52,7 @@ La Push API n'est pas magique : c'est une chaîne à **trois acteurs** avec un a
 
 ### 2.1 Trois acteurs : serveur, push service, navigateur
 
-Un push ne va **jamais** directement de ton serveur au navigateur. Il passe par un **push service** — une infrastructure opérée par le fabricant du navigateur (FCM pour Chrome, Mozilla autopush pour Firefox, WebKit pour Safari). Tu ne choisis pas ce service : il est imposé par le navigateur de l'utilisateur.
+Un push ne va **jamais** directement de ton serveur au navigateur. Il passe par un **push service** — une infrastructure opérée par le fabricant du navigateur (FCM pour Chrome, Mozilla autopush pour Firefox, APNs — Apple Push Notification service — pour Safari). Tu ne choisis pas ce service : il est imposé par le navigateur de l'utilisateur.
 
 ```
   Ton serveur              Push service               Navigateur
@@ -510,7 +510,7 @@ tribuzen/
 ## 7. Seeds Anki
 
 ```
-Par quels acteurs passe un message push et dans quel ordre ?|Ton serveur → un push service (FCM/Mozilla/WebKit, imposé par le navigateur) → le navigateur/service worker. Jamais du serveur directement au navigateur : on POST vers l'endpoint fourni à l'abonnement.
+Par quels acteurs passe un message push et dans quel ordre ?|Ton serveur → un push service (FCM/Mozilla/APNs, imposé par le navigateur) → le navigateur/service worker. Jamais du serveur directement au navigateur : on POST vers l'endpoint fourni à l'abonnement.
 À quoi sert VAPID et quelle clé va où ?|VAPID (paire ECDSA P-256) authentifie ton serveur auprès du push service. La clé publique est passée au navigateur via applicationServerKey ; la clé privée reste au serveur et signe un JWT joint à chaque envoi.
 Quelles deux options faut-il passer à pushManager.subscribe() et pourquoi ?|userVisibleOnly: true (Chrome/Edge rejettent sinon ; interdit les push silencieux) et applicationServerKey (clé publique VAPID, sinon pas d'auth serveur possible).
 Que renvoie Notification.requestPermission() et pourquoi ne pas la demander au chargement ?|Une Promise résolue en 'granted' | 'denied' | 'default', à appeler sur geste utilisateur. 'denied' est définitif : le prompt ne revient plus. On demande donc après une valeur perçue, sur clic.

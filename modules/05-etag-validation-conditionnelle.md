@@ -1,13 +1,13 @@
 ---
 titre: ETag et validation conditionnelle
 cours: 11-http-caching
-notions: [revalidation d'une ressource stale, ETag fort vs faible, préfixe W/ (weak), génération d'ETag par hash de contenu vs version applicative, Last-Modified, If-Modified-Since, If-None-Match, weak comparison algorithm, flux 304 Not Modified, précédence de If-None-Match sur If-Modified-Since, combinaison Cache-Control plus ETag]
+notions: [revalidation d'une ressource stale, ETag fort vs faible, "préfixe W/ (weak)", génération d'ETag par hash de contenu vs version applicative, Last-Modified, If-Modified-Since, If-None-Match, weak comparison algorithm, flux 304 Not Modified, précédence de If-None-Match sur If-Modified-Since, combinaison Cache-Control plus ETag]
 outcomes:
   - sait émettre un ETag (fort ou faible) et répondre 304 Not Modified sur une revalidation If-None-Match
   - sait choisir entre ETag fort et ETag faible et générer chacun (hash de contenu ou version applicative)
   - sait poser Last-Modified / If-Modified-Since en fallback et connaît sa précédence face à If-None-Match
   - sait combiner Cache-Control (fraîcheur) et ETag (revalidation) sur un même endpoint
-prerequis: [modules 00-04 du cours 11-http-caching (surtout 04-cache-control)]
+prerequis: [00-prerequis-et-vue-ensemble, 01-protocole-http, 02-http2-http3, 03-en-tetes-http, 04-cache-control]
 next: 06-stale-while-revalidate
 libs: []
 tribuzen: ETag et 304 sur les réponses API TribuZen — revalidation de la liste des membres d'une famille quand elle n'a pas changé

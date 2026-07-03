@@ -25,7 +25,7 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Modules', link: '/modules/00-prerequis-et-vue-ensemble' },
-      { text: 'Labs', link: '/labs/lab-01-http-inspector/README' },
+      { text: 'Labs', link: '/labs/lab-00-prerequis-et-vue-ensemble/README' },
       { text: 'Quizzes', link: '/quizzes/' },
       { text: 'Visualisations', link: '/visualizations/' },
       { text: 'Glossaire', link: '/glossaire' }
@@ -51,7 +51,34 @@ export default defineConfig({
             { text: '12 — Edge Rendering', link: '/modules/12-edge-rendering' },
             { text: '13 — HTTP Streaming', link: '/modules/13-http-streaming' },
             { text: '14 — Performance Web', link: '/modules/14-performance-web' },
-            { text: '15 — Projet final', link: '/modules/15-projet-final' }
+            { text: '15 — PWA & Service Workers', link: '/modules/15-pwa-service-workers' },
+            { text: '16 — Push API & Notifications', link: '/modules/16-push-api-web-notifications' },
+            { text: '17 — Projet final', link: '/modules/17-projet-final' }
+          ]
+        }
+      ],
+      '/labs/': [
+        {
+          text: 'Labs — pratique (énoncé + corrigé)',
+          items: [
+            { text: 'Lab 00 — Prérequis & vue d\'ensemble', link: '/labs/lab-00-prerequis-et-vue-ensemble/README' },
+            { text: 'Lab 01 — Le protocole HTTP', link: '/labs/lab-01-protocole-http/README' },
+            { text: 'Lab 02 — HTTP/2 & HTTP/3', link: '/labs/lab-02-http2-http3/README' },
+            { text: 'Lab 03 — Les en-têtes HTTP', link: '/labs/lab-03-en-tetes-http/README' },
+            { text: 'Lab 04 — Cache-Control', link: '/labs/lab-04-cache-control/README' },
+            { text: 'Lab 05 — ETag & validation conditionnelle', link: '/labs/lab-05-etag-validation-conditionnelle/README' },
+            { text: 'Lab 06 — Stale-While-Revalidate', link: '/labs/lab-06-stale-while-revalidate/README' },
+            { text: 'Lab 07 — Cache navigateur', link: '/labs/lab-07-cache-navigateur/README' },
+            { text: 'Lab 08 — CDN', link: '/labs/lab-08-cdn/README' },
+            { text: 'Lab 09 — Cache multi-couches', link: '/labs/lab-09-cache-multi-couches/README' },
+            { text: 'Lab 10 — SSR', link: '/labs/lab-10-ssr/README' },
+            { text: 'Lab 11 — ISR & SSG', link: '/labs/lab-11-isr-ssg/README' },
+            { text: 'Lab 12 — Edge Rendering', link: '/labs/lab-12-edge-rendering/README' },
+            { text: 'Lab 13 — HTTP Streaming', link: '/labs/lab-13-http-streaming/README' },
+            { text: 'Lab 14 — Performance Web', link: '/labs/lab-14-performance-web/README' },
+            { text: 'Lab 15 — PWA & Service Workers', link: '/labs/lab-15-pwa-service-workers/README' },
+            { text: 'Lab 16 — Push API & Notifications', link: '/labs/lab-16-push-api-web-notifications/README' },
+            { text: 'Lab 17 — Projet final', link: '/labs/lab-17-projet-final/README' }
           ]
         }
       ],

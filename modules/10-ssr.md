@@ -144,16 +144,18 @@ Cache-Control: private, no-store
 
 ### 2.9 SSR piloté par framework : Next.js 15 App Router
 
-Écrire un serveur SSR à la main (section 3) éclaire le mécanisme, mais en pratique un framework le fait. Next.js (App Router) est le cas de référence en entretien. **Point crucial vérifié sur la doc officielle (Next 15) :**
+Écrire un serveur SSR à la main (section 3) éclaire le mécanisme, mais en pratique un framework le fait. Next.js (App Router) est le cas de référence en entretien. **Deux notions à bien dissocier, vérifiées sur la doc officielle (Next 15) :**
 
-> **Par défaut, dans Next 15, `fetch()` n'est PAS caché.** Une route qui `fetch` sans option est rendue **dynamiquement** (SSR à chaque requête). Ceci a changé par rapport à Next 13/14 où `fetch` était caché par défaut. **On active le cache explicitement.**
+> **1) Donnée.** Par défaut, dans Next 15, `fetch()` **n'est PAS mis dans le Data Cache** (changement vs Next 13/14 où il l'était). Le résultat du `fetch` n'est donc pas mémorisé d'une requête à l'autre : on active ce cache **explicitement**.
+> **2) Rendu.** Un `fetch` non caché **ne rend PAS la route dynamique** pour autant. La route est toujours **prérendue statiquement au build** (le `fetch` s'exécute **une fois au build**). Ce qui bascule une route en **DYNAMIQUE** (rendue à chaque requête), c'est autre chose : une **API de requête** (`cookies()`/`headers()`/`searchParams`), `cache: 'no-store'`, `next: { revalidate: 0 }`, ou `export const dynamic = 'force-dynamic'`.
 
-Les trois leviers de cache de rendu :
+Autrement dit : « `fetch` non mis en Data Cache » ≠ « route rendue dynamiquement ». Les trois leviers de cache de rendu :
 
 **a) Au niveau du `fetch` (Data Cache) :**
 
 ```tsx
-// Rendu dynamique (défaut Next 15) : pas de cache, SSR à chaque requête
+// Donnée NON mise en Data Cache (défaut Next 15) : le fetch s'exécute au build,
+// puis à chaque revalidation — mais la route reste prérendue statiquement.
 const live = await fetch('https://api.tribuzen.app/sorties/42')
 
 // Opt-in cache : ce fetch est mémorisé (Data Cache)
@@ -295,7 +297,8 @@ export default async function SortiePage({
   const { slug } = await params;
 
   // fetch avec revalidation : Data Cache actif, re-fetch au plus toutes les 300 s.
-  // Sans cette option, en Next 15, le fetch NE serait PAS caché (rendu dynamique).
+  // Sans cette option, en Next 15, le fetch ne serait PAS mis en Data Cache
+  // (mais la route resterait prérendue statiquement — un fetch non caché ne la rend pas dynamique).
   const res = await fetch(`https://api.tribuzen.app/sorties/${slug}`, {
     next: { revalidate: 300 },
   });
@@ -380,21 +383,22 @@ Chaque utilisateur a un cookie différent → une **entrée de cache par utilisa
 
 **Règle :** si le HTML dépend d'un cookie de session, ce n'est pas une page à cacher en partagé.
 
-### PIÈGE #4 — Supposer que `fetch()` Next.js est caché par défaut (faux depuis Next 15)
+### PIÈGE #4 — Confondre « `fetch()` non caché » et « route rendue dynamiquement » (Next 15)
 
 ```tsx
-❌ // "Ce fetch est caché, c'est Next" — VRAI en Next 13/14, FAUX en Next 15
+❌ // "fetch sans option en Next 15 → route dynamique, SSR à chaque requête" — FAUX
 const data = await fetch('https://api.tribuzen.app/sorties/42');
 ```
 
-Depuis Next 15, un `fetch` **sans option n'est pas caché** : la route devient dynamique (SSR à chaque requête). Beaucoup de code copié d'anciens tutoriels croit encore l'inverse.
+Deux choses distinctes. **(1) Donnée :** depuis Next 15, un `fetch` **sans option n'est plus mis dans le Data Cache** (il l'était en Next 13/14) — son résultat n'est pas mémorisé. **(2) Rendu :** ce même `fetch` non caché **ne rend PAS la route dynamique** — la route reste **prérendue statiquement au build** (le `fetch` s'exécute une fois au build). Beaucoup de code copié d'anciens tutoriels confond les deux.
 
 ```tsx
+// Opt-in Data Cache (la donnée est mémorisée / revalidée) — le rendu reste statique :
 ✅ const data = await fetch('https://api.tribuzen.app/sorties/42', { cache: 'force-cache' });
 ✅ const data = await fetch('https://api.tribuzen.app/sorties/42', { next: { revalidate: 300 } });
 ```
 
-**Règle :** en Next 15, le cache de données est **opt-in explicite** (`force-cache` ou `next.revalidate`). Vérifie la version avant de raisonner sur le défaut.
+**Règle :** en Next 15, le cache de **données** est opt-in explicite (`force-cache` ou `next.revalidate`). Ce qui rend une **route** dynamique, c'est une API de requête (`cookies()`/`headers()`/`searchParams`), `cache: 'no-store'`, `revalidate: 0` ou `force-dynamic` — pas un simple `fetch` non caché.
 
 ### PIÈGE #5 — `cookies()` / `headers()` posés « au cas où » dans une page qu'on voulait cacher
 
@@ -462,7 +466,7 @@ Le SSR rend-il une page « plus rapide » ? Sur quelle métrique exactement ?|Le
 Pourquoi un HTML SSR public se cache-t-il avec s-maxage=300, max-age=0 ?|s-maxage=300 fait porter le cache par le CDN (partagé) : l'origine ne rend qu'au premier hit, TTFB quasi statique pour l'utilisateur. max-age=0 empêche le navigateur de figer sa propre copie du HTML (qui porte l'état de la page).
 Comment cacher une page SSR à la fois publique et personnalisée (« Bonjour Alice ») ?|On sort le perso du HTML SSR : le corps public est rendu et caché (s-maxage), le nom/avatar est injecté côté client via un appel API private (cache de fragment). Alternative : ESI, où le CDN assemble corps public caché + fragment perso non caché.
 Pourquoi Vary: Cookie est-il un anti-pattern sur du HTML SSR à cacher ?|Chaque utilisateur a un cookie différent → une entrée de cache par utilisateur → taux de hit ≈ 0. Le cache ne partage plus rien. Si la page dépend du cookie de session, elle n'est pas cachable en cache partagé : private, no-store.
-Quel est le défaut de cache de fetch() dans Next 15 App Router ?|fetch() N'EST PAS caché par défaut (changement vs Next 13/14). La route est rendue dynamiquement. On active le cache explicitement : cache: 'force-cache' (Data Cache) ou next: { revalidate: N } (revalidation temporelle).
+Quel est le défaut de cache de fetch() dans Next 15 App Router, et rend-il la route dynamique ?|fetch() n'est PAS mis dans le Data Cache par défaut (changement vs Next 13/14) : son résultat n'est pas mémorisé. Mais un fetch non caché NE rend PAS la route dynamique — elle reste prérendue statiquement au build (le fetch s'exécute une fois au build). On active le Data Cache explicitement : cache: 'force-cache' ou next: { revalidate: N }. Ce qui rend une route dynamique = cookies()/headers()/searchParams, cache: 'no-store', revalidate: 0 ou force-dynamic.
 Que se passe-t-il si on lit cookies() ou headers() dans une page Next qu'on voulait cacher ?|La route bascule automatiquement en dynamique : rendue à chaque requête, jamais cachée. Un export revalidate est alors ignoré. C'est voulu pour le perso, mais un oubli casse le cache d'une page publique.
 Qu'est-ce que l'« uncanny valley » de l'hydration ?|La fenêtre entre l'affichage du HTML SSR (visible) et la fin de l'hydration (interactif). La page ressemble à une page interactive mais ne l'est pas : un clic ne fait rien tant que le JS n'a pas rattaché les gestionnaires d'événements.
 Différence entre Full Route Cache et Data Cache dans Next.js ?|Data Cache : cache le résultat des fetch opt-in (cache: 'force-cache' ou next.revalidate), indépendamment de la route. Full Route Cache : cache le résultat rendu d'une route (HTML + payload RSC), piloté par revalidate/dynamic sur le segment.

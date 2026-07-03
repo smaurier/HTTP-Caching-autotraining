@@ -7,7 +7,7 @@ outcomes:
   - sait choisir la bonne stratégie de rendu et de cache par type de contenu
   - sait invalider un cache multi-couches sans servir de contenu périmé
   - sait relier chaque optimisation de cache à un Core Web Vital mesurable
-prerequis: [00-prerequis-et-vue-ensemble, 04-cache-control, 05-etag-validation-conditionnelle, 06-stale-while-revalidate, 08-cdn, 09-cache-multi-couches, 11-isr-ssg, 14-performance-web, 15-pwa-service-workers]
+prerequis: [00-prerequis-et-vue-ensemble, 04-cache-control, 05-etag-validation-conditionnelle, 06-stale-while-revalidate, 08-cdn, 09-cache-multi-couches, 11-isr-ssg, 12-edge-rendering, 13-http-streaming, 14-performance-web, 15-pwa-service-workers]
 next: fin-parcours-11-http-caching
 libs: []
 tribuzen: chaîne de cache TribuZen de bout en bout — CDN avatars, ISR pages sorties, cache API feed, SW offline, budgets Core Web Vitals
@@ -85,8 +85,9 @@ C'est le cœur du projet : associer chaque ressource TribuZen à une stratégie.
 | Avatar / image de sortie | statique | `max-age=86400` | `s-maxage=604800` | Change rarement ; purge on-demand si upload |
 | Page d'accueil marketing | SSG | `no-cache` + ETag | `s-maxage=300, swr=3600` | Identique pour tous, régénérée rarement |
 | Page sortie `/sorties/:id` | ISR | `no-cache` + ETag | `s-maxage=60, swr=600` | Semi-dynamique ; SWR absorbe les pics |
+| Décision géo/locale, gate `/app/*` | Edge (middleware, module 12) | n/a (307, léger) | n/a | Décision prise au POP local, **avant** le rendu → pas de round-trip origine |
 | API feed `/api/feed` | SSR + cache court | `no-cache` | `s-maxage=30, swr=300` | Varie souvent mais tolère 30 s de fraîcheur |
-| Dashboard famille (données perso) | SSR dynamique | `private, no-store` | **PAS DE CACHE** | Personnalisé → jamais sur un cache partagé |
+| Dashboard famille (données perso) | SSR dynamique + streaming (module 13) | `private, no-store` | **PAS DE CACHE** | Personnalisé → jamais sur un cache partagé ; le **streaming** (Suspense) livre le shell tout de suite, les fragments perso ensuite |
 
 **Règle d'or de sécurité** : tout ce qui est personnalisé (session, panier, données famille privées) porte `private, no-store` **et** un `Vary: Cookie, Authorization`. Une seule fuite de cette page dans le CDN = données d'un membre servies à un autre.
 
@@ -226,15 +227,18 @@ Ce module est le **livrable d'intégration** : tu appliques la matrice §2.3 sur
 
 ```
 tribuzen/
+  middleware.ts               ← Edge (module 12) : géo-redirect locale + gate /app, AVANT le rendu
   public/
     avatars/*                 ← max-age=86400 (nav) / s-maxage=7j (CDN), purge à l'upload
   app/
     (marketing)/page.tsx      ← SSG, s-maxage=300, swr=3600
     sorties/[id]/page.tsx     ← ISR, revalidate=60, s-maxage=60, swr=600
     api/feed/route.ts         ← SSR + Cache-Control s-maxage=30, swr=300
-    (app)/dashboard/page.tsx  ← SSR dynamique, private, no-store, Vary: Cookie
+    (app)/dashboard/page.tsx  ← SSR dynamique + streaming (module 13), private, no-store, Vary: Cookie
   public/sw.js                ← Service Worker : cache-first sur assets, network-first sur API
 ```
+
+**Portée de l'intégration.** Le capstone assemble la chaîne de rendu/cache de bout en bout : au **edge** (module 12) les décisions géo/gate sont prises **avant** le rendu, dans le POP local, sans casser le cache CDN des pages ISR ; le **streaming** HTML (module 13, Suspense) est l'option de **livraison progressive** du dashboard perso — shell tout de suite, fragments personnalisés ensuite. En revanche, la **Push API / Web Notifications (module 16) est hors périmètre cache** : c'est un canal serveur→appareil (réveil du service worker), pas une couche de cache. Elle fait bien partie du **parcours**, mais n'entre pas dans la matrice de décision de cache ci-dessus.
 
 Traduction des 4 symptômes du beta-testeur (§1) en corrections :
 

@@ -104,13 +104,13 @@ export const config = {
 Ce que le middleware peut renvoyer :
 
 - `NextResponse.next()` — laisse passer la requête vers le rendu.
-- `NextResponse.redirect(url)` — redirige (302) ; c'est notre géo-redirection.
+- `NextResponse.redirect(url)` — redirige (**307** Temporary Redirect par défaut, qui **préserve la méthode**) ; c'est notre géo-redirection.
 - `NextResponse.rewrite(url)` — **réécrit** l'URL cible **sans changer l'URL affichée** (idéal A/B : `/landing` → `/landing/b` en interne).
 - `Response.json(...)` / `new Response(...)` — répond **directement** au edge, sans jamais toucher l'origine (ex. bloquer une requête non authentifiée).
 
 Le **`matcher`** est non négociable : sans lui, le middleware s'exécute aussi sur `_next/static`, les images, le CSS — ce qui ajoute de la latence à chaque asset. On exclut typiquement les fichiers statiques.
 
-> **Frontière de version (Next 15 → 16).** Ce module suit **Next 15** : le fichier est `middleware.ts` et s'exécute sur l'Edge Runtime par défaut ; depuis 15.5 on peut opter pour le Node.js runtime (stable). En **Next 16**, `middleware` a été **renommé `proxy`** (fichier `proxy.ts`, fonction `proxy`) et **bascule par défaut sur le Node.js runtime** — un codemod (`@next/codemod middleware-to-proxy`) automatise la migration. Tiens-toi à `middleware.ts` tant que le repo est en Next 15.
+> **Frontière de version (Next 15 → 16).** Ce module suit **Next 15** : le fichier est `middleware.ts` et s'exécute sur l'Edge Runtime par défaut ; depuis 15.5 on peut opter pour le Node.js runtime (stable). En **Next 16**, `middleware` a été **renommé `proxy`** (fichier `proxy.ts`, fonction `proxy`) et **bascule par défaut sur le Node.js runtime** (`middleware.ts` reste toléré pour l'Edge Runtime mais est déprécié). La migration est essentiellement un **renommage** (`middleware.ts` → `proxy.ts`, fonction → `proxy`), et le codemod d'upgrade générique `npx @next/codemod@canary upgrade latest` l'automatise avec le reste de la montée de version. Tiens-toi à `middleware.ts` tant que le repo est en Next 15.
 
 ### 2.4 Lire la géolocalisation au edge — le piège Next 15
 
@@ -227,7 +227,7 @@ export function middleware(request: NextRequest) {
       const loginUrl = request.nextUrl.clone()
       loginUrl.pathname = '/login'
       loginUrl.searchParams.set('next', pathname)
-      return NextResponse.redirect(loginUrl) // 302 émis depuis le POP local
+      return NextResponse.redirect(loginUrl) // 307 émis depuis le POP local
     }
     // Session présente : on laisse passer (la vérif fine se fait côté origine).
     return NextResponse.next()
@@ -412,7 +412,7 @@ TribuZen garde ses pages sur le Node.js runtime (ISR, module 11) et déporte au 
 
 | Élément | Runtime | Rôle | Cache |
 |---|---|---|---|
-| `middleware.ts` (géo-redirect locale) | Edge | rediriger `/activites/*` → `/{locale}/activites/*` depuis le POP local | n/a (302, léger) |
+| `middleware.ts` (géo-redirect locale) | Edge | rediriger `/activites/*` → `/{locale}/activites/*` depuis le POP local | n/a (307, léger) |
 | `middleware.ts` (gate `/app/*`) | Edge | rediriger vers `/login` si pas de cookie `tz_session` | n/a |
 | `GET /api/region` | Edge (`runtime='edge'`) | renvoyer pays/devise détectés | `s-maxage=60` + `CDN-Cache-Control: max-age=300`, `Vary: x-vercel-ip-country` |
 | `/activites/[slug]` (fiche) | **Node.js** | rendu **ISR** (module 11) | `s-maxage` via ISR, caché CDN |
@@ -460,11 +460,11 @@ Peut-on faire de l'ISR au edge ?|Non. L'Edge Runtime ne supporte pas l'Increment
 À quoi sert le matcher d'un middleware Next et que risque-t-on sans lui ?|Le matcher (export const config = { matcher: [...] }) restreint les routes sur lesquelles le middleware s'exécute. Sans matcher, il tourne sur CHAQUE requête, y compris _next/static, images et CSS — ce qui ajoute de la latence à chaque asset. On cible les routes utiles et on exclut les statiques.
 Comment cacher une réponse edge sans casser le cache CDN des pages ISR ?|On réutilise s-maxage / CDN-Cache-Control / stale-while-revalidate (modules 04/06/08) en ne cachant QUE ce qui est identique pour tous, avec un Vary sur le header discriminant (ex. Vary: x-vercel-ip-country pour une réponse par pays). Le middleware ne doit pas poser d'en-tête no-store ni de cookie par utilisateur sur une route publique, sinon le CDN cesse de la partager.
 Le edge est-il toujours plus rapide que l'origine ?|Non. Le edge rapproche le calcul de l'utilisateur, pas la donnée. Si la fonction edge doit rappeler une base centralisée dans une seule région, elle AJOUTE un saut réseau par requête au lieu d'en retirer un. Règle : rapprocher le calcul de là où est la donnée ; le edge gagne quand il n'a besoin que de la requête (header, cookie, géo) ou d'une donnée déjà distribuée (KV).
-Qu'est-ce qui change entre Next 15 et Next 16 pour le middleware ?|En Next 15 : fichier middleware.ts, exécuté sur l'Edge Runtime par défaut (Node.js runtime opt-in stable depuis 15.5). En Next 16 : middleware est renommé proxy (fichier proxy.ts, fonction proxy) et bascule par défaut sur le Node.js runtime ; un codemod (@next/codemod middleware-to-proxy) automatise la migration.
+Qu'est-ce qui change entre Next 15 et Next 16 pour le middleware ?|En Next 15 : fichier middleware.ts, exécuté sur l'Edge Runtime par défaut (Node.js runtime opt-in stable depuis 15.5). En Next 16 : middleware est renommé proxy (fichier proxy.ts, fonction proxy) et bascule par défaut sur le Node.js runtime (middleware.ts reste toléré pour l'Edge mais déprécié). La migration est un renommage ; le codemod d'upgrade générique npx @next/codemod@canary upgrade latest l'automatise.
 ```
 
 ---
 
 ## Pont vers le lab
 
-> Lab associé : `11-http-caching/labs/lab-12-edge-rendering/README.md`. Construire un `middleware.ts` Next.js 15 qui géo-redirige selon un header (`x-vercel-ip-country`) et gate `/app/*` sur un cookie, plus une route `runtime='edge'` cachée à l'edge, puis **observer** au terminal avec `curl` (en injectant le header géo et le cookie via `-H`) les redirections 302, l'URL réécrite et les en-têtes `Cache-Control`/`CDN-Cache-Control`.
+> Lab associé : `11-http-caching/labs/lab-12-edge-rendering/README.md`. Construire un `middleware.ts` Next.js 15 qui géo-redirige selon un header (`x-vercel-ip-country`) et gate `/app/*` sur un cookie, plus une route `runtime='edge'` cachée à l'edge, puis **observer** au terminal avec `curl` (en injectant le header géo et le cookie via `-H`) les redirections 307, l'URL réécrite et les en-têtes `Cache-Control`/`CDN-Cache-Control`.
