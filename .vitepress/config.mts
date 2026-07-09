@@ -14,13 +14,9 @@ export default defineConfig({
   srcExclude: ['cours/**'],
 
   // Docs statiques : neutralise l'interpolation Vue `{{ }}` en prose.
-  vue: {
-    template: {
-      compilerOptions: {
-        delimiters: ['(%(', ')%)'],
-      },
-    },
-  },
+  // NB : override `delimiters` retiré (il cassait le {{ }} du thème par défaut).
+  // cf docs/curriculum/DETTE-vitepress-delimiters.md
+
 
   themeConfig: {
     nav: [
