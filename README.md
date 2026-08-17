@@ -1,5 +1,9 @@
 # HTTP & Caching — Maîtriser le protocole et le cache web
 
+![VitePress](https://img.shields.io/badge/-VitePress-646CFF?style=flat-square&logo=vite&logoColor=white)
+![TypeScript](https://img.shields.io/badge/-TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+[![fullstack-autotraining](https://img.shields.io/badge/curriculum-fullstack--autotraining-4C1?style=flat-square)](https://github.com/smaurier/fullstack-autotraining)
+
 Formation complète sur HTTP et le caching web : du protocole aux architectures cache multi-couches (débutant → expert).
 
 **Ce cours couvre tout le spectre** : le protocole HTTP, les headers, Cache-Control, ETag, CDN, SSR, ISR, edge rendering, streaming, et la performance web.
