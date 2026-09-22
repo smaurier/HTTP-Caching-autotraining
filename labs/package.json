@@ -10,7 +10,9 @@
     "lab:02": "vitest run --root lab-02-pwa-offline-first",
     "solution:02": "vitest run --root lab-02-pwa-offline-first --config vitest.solution.config.ts",
     "lab:03": "vitest run --root lab-03-cache-stale-en-prod",
-    "solution:03": "vitest run --root lab-03-cache-stale-en-prod --config vitest.solution.config.ts"
+    "solution:03": "vitest run --root lab-03-cache-stale-en-prod --config vitest.solution.config.ts",
+    "lab:04": "vitest run --root lab-04-ajouter-le-push",
+    "solution:04": "vitest run --root lab-04-ajouter-le-push --config vitest.solution.config.ts"
   },
   "engines": {
     "node": ">=20.0.0"
