@@ -11,14 +11,14 @@ Formation complète sur HTTP et le caching web : du protocole aux architectures 
 <!-- labs-gestes:start -->
 ## Labs — refonte du 22/09/2026 : un lab = un geste métier complet
 
-> Règle qualité 5 du parcours : chaque lab est **un geste métier complet**, sous deux formes — **Zéro** (construire de zéro un artefact réel et entier) ou **Intervention** (modifier de l'existant avec consommateurs, findings avant code, non-régression). Un lab n'entre en file qu'avec un **oracle exécutable** (`src/` starter · `test/` · `solution/` séparée). Les labs historiques de ce cours (un concept par lab, sans oracle) restent dans `labs/` jusqu'à remplacement et **ne sont plus la file**. Cible détaillée : [`docs/gestes-complets.md`](../docs/gestes-complets.md). État : **3/4 avec oracle**.
+> Règle qualité 5 du parcours : chaque lab est **un geste métier complet**, sous deux formes — **Zéro** (construire de zéro un artefact réel et entier) ou **Intervention** (modifier de l'existant avec consommateurs, findings avant code, non-régression). Un lab n'entre en file qu'avec un **oracle exécutable** (`src/` starter · `test/` · `solution/` séparée). Les labs historiques de ce cours (un concept par lab, sans oracle) restent dans `labs/` jusqu'à remplacement et **ne sont plus la file**. Cible détaillée : [`docs/gestes-complets.md`](../docs/gestes-complets.md). État : **4/4 avec oracle**.
 
 | # | Lab | Forme | Geste | Oracle |
 |---|-----|-------|-------|--------|
 | 01 | [`lab-01-strategie-de-cache`](labs/lab-01-strategie-de-cache/README.md) | Zéro | headers, ETag, CDN, Redis, mesuré avant/après | ✅ vérifié |
 | 02 | [`lab-02-pwa-offline-first`](labs/lab-02-pwa-offline-first/README.md) | Zéro | trois stratégies de cache Service Worker (cache-first/network-first/SWR) ; cycle de vie SW hors oracle (navigateur requis) | ✅ vérifié |
 | 03 | [`lab-03-cache-stale-en-prod`](labs/lab-03-cache-stale-en-prod/README.md) | Intervention | diagnostiquer et corriger | ✅ vérifié |
-| 04 | `lab-04-ajouter-le-push` | Intervention | à une appli existante | · à écrire |
+| 04 | [`lab-04-ajouter-le-push`](labs/lab-04-ajouter-le-push/README.md) | Intervention | à une appli existante | ✅ vérifié |
 
 <!-- labs-gestes:end -->
 
